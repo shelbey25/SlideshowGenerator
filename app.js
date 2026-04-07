@@ -735,60 +735,40 @@ class ImageAnalyzer {
     }
 
     /**
-     * Smart-match photos to frames by aspect ratio.
-     * Uses the slide aspect ratio to compute correct frame aspects.
+     * Optimal matching of photos to frames by aspect ratio.
+     * Sorts both by aspect ratio and matches in order — provably minimizes
+     * total log-ratio distance (rearrangement inequality).
      */
     matchPhotosToFrames(photos, frames, slideRatio) {
         if (photos.length === 0 || frames.length === 0) return photos;
         const n = Math.min(photos.length, frames.length);
         const r = slideRatio || (960 / 540);
 
-        // True pixel aspect ratios
         const frameAspects = frames.map(f => this.getFrameAspect(f, r));
         const photoAspects = photos.map(p => {
             const dims = this._cache.get(p.file);
             return dims ? dims.aspect : 1;
         });
 
+        // Sort frame indices and photo indices by aspect ratio
+        const sortedFrames = Array.from({ length: n }, (_, i) => i);
+        sortedFrames.sort((a, b) => frameAspects[a] - frameAspects[b]);
+
+        const sortedPhotos = Array.from({ length: n }, (_, i) => i);
+        sortedPhotos.sort((a, b) => photoAspects[a] - photoAspects[b]);
+
+        // Match i-th sorted frame with i-th sorted photo (optimal)
         const result = new Array(n);
-        const usedPhotos = new Set();
-
-        // Most extreme frames first (pickiest about orientation)
-        const frameOrder = Array.from({ length: n }, (_, i) => i);
-        frameOrder.sort((a, b) => {
-            return Math.abs(Math.log(frameAspects[b])) - Math.abs(Math.log(frameAspects[a]));
-        });
-
-        for (const fi of frameOrder) {
-            const fa = frameAspects[fi];
-            let bestIdx = -1;
-            let bestScore = Infinity;
-
-            for (let pi = 0; pi < n; pi++) {
-                if (usedPhotos.has(pi)) continue;
-                const score = Math.abs(Math.log(photoAspects[pi]) - Math.log(fa));
-                if (score < bestScore) {
-                    bestScore = score;
-                    bestIdx = pi;
-                }
-            }
-
-            if (bestIdx >= 0) {
-                result[fi] = photos[bestIdx];
-                usedPhotos.add(bestIdx);
-            }
-        }
-
         for (let i = 0; i < n; i++) {
-            if (!result[i]) result[i] = photos[i];
+            result[sortedFrames[i]] = photos[sortedPhotos[i]];
         }
         return result;
     }
 
     /**
      * Score how well a batch of photos fits a layout.
-     * Lower score = less total cropping needed.
-     * Score = sum of |log(photoAspect) - log(frameAspect)| for best matching.
+     * Lower score = less total cropping. Uses sorted matching (optimal) plus
+     * a heavy penalty for orientation mismatches (portrait↔landscape).
      */
     scoreLayoutFit(photos, layout, slideRatio) {
         const r = slideRatio || (960 / 540);
@@ -801,28 +781,29 @@ class ImageAnalyzer {
             return dims ? dims.aspect : 1;
         });
 
-        // Optimal assignment using greedy matching (same as matchPhotosToFrames)
-        const usedPhotos = new Set();
+        // Sorted matching (optimal assignment)
+        const sortedFA = [...frameAspects].sort((a, b) => a - b);
+        const sortedPA = [...photoAspects].sort((a, b) => a - b);
+
         let totalScore = 0;
+        for (let i = 0; i < n; i++) {
+            const fa = sortedFA[i];
+            const pa = sortedPA[i];
+            let score = Math.abs(Math.log(pa) - Math.log(fa));
 
-        const frameOrder = Array.from({ length: n }, (_, i) => i);
-        frameOrder.sort((a, b) => Math.abs(Math.log(frameAspects[b])) - Math.abs(Math.log(frameAspects[a])));
-
-        for (const fi of frameOrder) {
-            const fa = frameAspects[fi];
-            let bestIdx = -1;
-            let bestScore = Infinity;
-            for (let pi = 0; pi < n; pi++) {
-                if (usedPhotos.has(pi)) continue;
-                const score = Math.abs(Math.log(photoAspects[pi]) - Math.log(fa));
-                if (score < bestScore) { bestScore = score; bestIdx = pi; }
+            // Heavy penalty for orientation mismatch
+            const photoIsPortrait = pa < 0.92;
+            const frameIsPortrait = fa < 0.92;
+            const photoIsLandscape = pa > 1.08;
+            const frameIsLandscape = fa > 1.08;
+            if ((photoIsPortrait && frameIsLandscape) || (photoIsLandscape && frameIsPortrait)) {
+                score += 0.8; // Strong orientation mismatch penalty
             }
-            if (bestIdx >= 0) { totalScore += bestScore; usedPhotos.add(bestIdx); }
+
+            totalScore += score;
         }
 
-        // Penalize layouts that waste photos (have fewer frames than photos in batch)
-        // or have more frames than photos (empty frames)
-        const unusedPhotos = photos.length - n;
+        // Penalize empty frames
         const emptyFrames = layout.frames.length - n;
         totalScore += emptyFrames * 0.5;
 
@@ -838,62 +819,70 @@ const imageAnalyzer = new ImageAnalyzer();
 
 
 /**
- * Build an intelligent layout sequence that picks the best layout
- * for each slide's batch of photos to minimize cropping.
- * Enabled layouts are the pool to choose from. Randomization is added
- * as a tiebreaker so similar-scoring layouts get variety.
+ * Build full slide data: sorts photos by aspect ratio to create
+ * homogeneous batches (portraits together, landscapes together),
+ * picks the best layout per batch, does optimal matching within
+ * each batch, then shuffles the final slide order for visual variety.
+ *
+ * Returns Array<{ layout, matchedPhotos }> — ready for preview/export.
  */
-function buildSmartLayoutSequence(enabledLayouts, photos, slideRatio) {
-    if (enabledLayouts.length === 0) return [];
-    if (enabledLayouts.length === 1) {
-        const count = Math.ceil(photos.length / enabledLayouts[0].frames.length) + 1;
-        return Array(count).fill(enabledLayouts[0]);
-    }
+function buildSmartSlideSequence(enabledLayouts, photos, slideRatio) {
+    if (enabledLayouts.length === 0 || photos.length === 0) return [];
 
-    const sequence = [];
-    let photoIdx = 0;
+    // Sort photos by aspect ratio so similar orientations batch together
+    const sorted = [...photos].sort((a, b) => {
+        const da = imageAnalyzer._cache.get(a.file);
+        const db = imageAnalyzer._cache.get(b.file);
+        return (da ? da.aspect : 1) - (db ? db.aspect : 1);
+    });
+
+    const slides = [];
+    let pidx = 0;
     let lastLayoutId = null;
 
-    while (photoIdx < photos.length) {
-        // For the next batch, try each layout and score it
-        let bestLayout = null;
-        let bestScore = Infinity;
+    while (pidx < sorted.length) {
         const candidates = [];
 
         for (const layout of enabledLayouts) {
-            const batchSize = Math.min(layout.frames.length, photos.length - photoIdx);
-            const batch = photos.slice(photoIdx, photoIdx + batchSize);
+            const batchSize = Math.min(layout.frames.length, sorted.length - pidx);
+            if (batchSize === 0) continue;
+            const batch = sorted.slice(pidx, pidx + batchSize);
             const score = imageAnalyzer.scoreLayoutFit(batch, layout, slideRatio);
-            candidates.push({ layout, score });
+            candidates.push({ layout, score, batchSize });
         }
 
-        // Sort by score, add small random jitter for variety
-        candidates.sort((a, b) => a.score - b.score);
+        if (candidates.length === 0) break;
 
-        // Pick from top candidates (within 20% of best score) with randomness
+        candidates.sort((a, b) => a.score - b.score);
         const topScore = candidates[0].score;
-        const threshold = topScore * 1.2 + 0.1; // 20% tolerance
+        const threshold = topScore * 1.15 + 0.05;
         const topCandidates = candidates.filter(c => c.score <= threshold);
 
-        // Prefer not repeating the last layout
-        let picked = topCandidates[0].layout;
-        if (topCandidates.length > 1 && picked.id === lastLayoutId) {
-            // Pick randomly from remaining top candidates
+        let picked;
+        if (topCandidates.length > 1 && topCandidates[0].layout.id === lastLayoutId) {
             const others = topCandidates.filter(c => c.layout.id !== lastLayoutId);
-            if (others.length > 0) {
-                picked = others[Math.floor(Math.random() * others.length)].layout;
-            }
+            picked = others.length > 0 ? others[Math.floor(Math.random() * others.length)] : topCandidates[0];
         } else if (topCandidates.length > 1) {
-            // Random pick from top candidates for variety
-            picked = topCandidates[Math.floor(Math.random() * topCandidates.length)].layout;
+            picked = topCandidates[Math.floor(Math.random() * topCandidates.length)];
+        } else {
+            picked = topCandidates[0];
         }
 
-        sequence.push(picked);
-        lastLayoutId = picked.id;
-        photoIdx += picked.frames.length;
+        const batch = sorted.slice(pidx, pidx + picked.batchSize);
+        const matched = imageAnalyzer.matchPhotosToFrames(batch, picked.layout.frames, slideRatio);
+
+        slides.push({ layout: picked.layout, matchedPhotos: matched });
+        lastLayoutId = picked.layout.id;
+        pidx += picked.batchSize;
     }
 
-    return sequence;
+    // Shuffle slide order so portrait and landscape slides are interleaved
+    for (let i = slides.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [slides[i], slides[j]] = [slides[j], slides[i]];
+    }
+
+    return slides;
 }
 
 
@@ -939,20 +928,7 @@ class PDFGenerator {
             });
 
             onProgress(0.10, 'Optimizing layout sequence...');
-            const smartLayouts = buildSmartLayoutSequence(layoutSequence, photos, slideRatio);
-
-            slideDataList = [];
-            let pidx = 0;
-            let sn = 0;
-            while (pidx < photos.length) {
-                const layout = smartLayouts[sn] || layoutSequence[sn % layoutSequence.length];
-                const batchSize = Math.min(layout.frames.length, photos.length - pidx);
-                const batchPhotos = photos.slice(pidx, pidx + batchSize);
-                const matched = imageAnalyzer.matchPhotosToFrames(batchPhotos, layout.frames, slideRatio);
-                slideDataList.push({ layout, matchedPhotos: matched });
-                pidx += batchSize;
-                sn++;
-            }
+            slideDataList = buildSmartSlideSequence(layoutSequence, photos, slideRatio);
         }
 
         let totalPhotos = 0;
@@ -1004,15 +980,17 @@ class PDFGenerator {
                         height: frameH
                     });
 
-                    // Draw border
+                    // Draw border (unfilled rect on top of image)
                     if (borderWidth > 0) {
                         page.drawRectangle({
-                            x: frameX + borderWidth / 2,
-                            y: frameY + borderWidth / 2,
-                            width: frameW - borderWidth,
-                            height: frameH - borderWidth,
+                            x: frameX,
+                            y: frameY,
+                            width: frameW,
+                            height: frameH,
                             borderColor: rgb(borderRGB.r / 255, borderRGB.g / 255, borderRGB.b / 255),
                             borderWidth: borderWidth,
+                            borderOpacity: 1,
+                            opacity: 0,
                         });
                     }
                 } catch (err) {
@@ -1695,30 +1673,12 @@ class App {
             if (el) el.textContent = `Detecting faces... ${Math.round(pct * 100)}%`;
         });
 
-        // Phase 3: Build smart layout sequence
+        // Phase 3: Build smart slide sequence (sorts photos by AR, picks best layouts, matches)
         if (document.getElementById('preview-progress'))
             document.getElementById('preview-progress').textContent = 'Optimizing layouts...';
-        const smartLayouts = buildSmartLayoutSequence(selectedLayouts, photos, slideRatio);
-
-        // Phase 4: Build slide data (preserves crop overrides from previous session)
-        this._previewSlideData = [];
-        let photoIdx = 0;
-        let slideNum = 0;
-
-        while (photoIdx < photos.length) {
-            const layout = smartLayouts[slideNum] || selectedLayouts[slideNum % selectedLayouts.length];
-            const batchSize = Math.min(layout.frames.length, photos.length - photoIdx);
-            const batchPhotos = photos.slice(photoIdx, photoIdx + batchSize);
-            const matched = imageAnalyzer.matchPhotosToFrames(batchPhotos, layout.frames, slideRatio);
-
-            this._previewSlideData.push({
-                slideIdx: slideNum,
-                layout: layout,
-                matchedPhotos: matched,
-            });
-
-            photoIdx += batchSize;
-            slideNum++;
+        this._previewSlideData = buildSmartSlideSequence(selectedLayouts, photos, slideRatio);
+        for (let si = 0; si < this._previewSlideData.length; si++) {
+            this._previewSlideData[si].slideIdx = si;
         }
 
         // Phase 5: Render all slide thumbnails
@@ -1940,15 +1900,20 @@ class App {
             frameDiv.style.width = fw + 'px';
             frameDiv.style.height = fh + 'px';
 
-            if (borderWidth > 0) {
-                frameDiv.style.boxShadow = `inset 0 0 0 ${Math.max(1, borderWidth * (containerWidth / 960))}px ${borderColor}`;
-            }
-
             const img = document.createElement('img');
             img.src = photo.objectUrl || URL.createObjectURL(photo.file);
             img.draggable = false;
 
             frameDiv.appendChild(img);
+
+            // Border overlay (rendered on top of the image so it's always visible)
+            if (borderWidth > 0) {
+                const overlay = document.createElement('div');
+                const bw = Math.max(1, Math.round(borderWidth * (containerWidth / 960)));
+                overlay.style.cssText = `position:absolute;inset:0;pointer-events:none;z-index:2;border:${bw}px solid ${borderColor}`;
+                frameDiv.appendChild(overlay);
+            }
+
             container.appendChild(frameDiv);
 
             // Wait for image to load
