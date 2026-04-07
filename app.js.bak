@@ -1,0 +1,1386 @@
+/* ============================================================
+   SLIDESHOW GENERATOR - APPLICATION
+   ============================================================
+   Single-file JS: Layout Editor + PDF Generator + App Controller
+   ============================================================ */
+
+// ===================== CONSTANTS =====================
+
+const FRAME_COLORS = [
+    'rgba(74,144,217,0.5)', 'rgba(40,167,69,0.5)', 'rgba(232,89,12,0.5)',
+    'rgba(156,39,176,0.5)', 'rgba(255,193,7,0.6)', 'rgba(0,188,212,0.5)',
+    'rgba(244,67,54,0.5)', 'rgba(96,125,139,0.5)'
+];
+
+const QUALITY_MAP = {
+    high:   { dpiScale: 150 / 72, jpegQuality: 0.92 },
+    medium: { dpiScale: 100 / 72, jpegQuality: 0.85 },
+    low:    { dpiScale: 1,         jpegQuality: 0.75 }
+};
+
+const SLIDE_SIZES = {
+    '16:9': { width: 960, height: 540 },
+    '4:3':  { width: 720, height: 540 }
+};
+
+const DEFAULT_LAYOUTS = [
+    {
+        id: 'default-1-full',
+        name: '1 Photo — Full',
+        isDefault: true,
+        frames: [{ x: 3, y: 4, w: 94, h: 92 }]
+    },
+    {
+        id: 'default-2-side',
+        name: '2 Photos — Side by Side',
+        isDefault: true,
+        frames: [
+            { x: 2, y: 4, w: 47, h: 92 },
+            { x: 51, y: 4, w: 47, h: 92 }
+        ]
+    },
+    {
+        id: 'default-2-stack',
+        name: '2 Photos — Stacked',
+        isDefault: true,
+        frames: [
+            { x: 3, y: 2, w: 94, h: 47 },
+            { x: 3, y: 51, w: 94, h: 47 }
+        ]
+    },
+    {
+        id: 'default-3-feature',
+        name: '3 Photos — Feature Left',
+        isDefault: true,
+        frames: [
+            { x: 2, y: 4, w: 50, h: 92 },
+            { x: 54, y: 4, w: 44, h: 44 },
+            { x: 54, y: 52, w: 44, h: 44 }
+        ]
+    },
+    {
+        id: 'default-3-row',
+        name: '3 Photos — Row',
+        isDefault: true,
+        frames: [
+            { x: 1.5, y: 8, w: 31.5, h: 84 },
+            { x: 34.25, y: 8, w: 31.5, h: 84 },
+            { x: 67, y: 8, w: 31.5, h: 84 }
+        ]
+    },
+    {
+        id: 'default-4-grid',
+        name: '4 Photos — Grid',
+        isDefault: true,
+        frames: [
+            { x: 2, y: 3, w: 47, h: 45.5 },
+            { x: 51, y: 3, w: 47, h: 45.5 },
+            { x: 2, y: 51.5, w: 47, h: 45.5 },
+            { x: 51, y: 51.5, w: 47, h: 45.5 }
+        ]
+    },
+    {
+        id: 'default-5-mixed',
+        name: '5 Photos — Mixed',
+        isDefault: true,
+        frames: [
+            { x: 1.5, y: 3, w: 32, h: 45.5 },
+            { x: 34.5, y: 3, w: 32, h: 45.5 },
+            { x: 67.5, y: 3, w: 31, h: 45.5 },
+            { x: 1.5, y: 51.5, w: 48, h: 45.5 },
+            { x: 51, y: 51.5, w: 47.5, h: 45.5 }
+        ]
+    },
+    {
+        id: 'default-6-grid',
+        name: '6 Photos — Grid',
+        isDefault: true,
+        frames: [
+            { x: 1.5, y: 3, w: 32, h: 45.5 },
+            { x: 34.5, y: 3, w: 32, h: 45.5 },
+            { x: 67.5, y: 3, w: 31, h: 45.5 },
+            { x: 1.5, y: 51.5, w: 32, h: 45.5 },
+            { x: 34.5, y: 51.5, w: 32, h: 45.5 },
+            { x: 67.5, y: 51.5, w: 31, h: 45.5 }
+        ]
+    }
+];
+
+// ===================== LAYOUT EDITOR =====================
+
+class LayoutEditor {
+    constructor() {
+        this.modal = document.getElementById('layout-editor-modal');
+        this.canvas = document.getElementById('editor-canvas');
+        this.frames = [];
+        this.selectedIndex = null;
+        this.mode = null;          // 'drag' | 'resize' | null
+        this.resizeDir = null;     // 'nw','ne','sw','se','n','s','e','w'
+        this.startMouse = null;
+        this.startFrame = null;
+        this.editingPresetId = null;
+        this.onSaveCallback = null;
+
+        this._bindElements();
+        this._bindEvents();
+    }
+
+    _bindElements() {
+        this.addFrameBtn = document.getElementById('add-frame-btn');
+        this.removeFrameBtn = document.getElementById('remove-frame-btn');
+        this.saveBtn = document.getElementById('save-preset-btn');
+        this.cancelBtn = document.getElementById('cancel-editor-btn');
+        this.closeBtn = document.getElementById('editor-close');
+        this.nameInput = document.getElementById('preset-name');
+        this.frameCountEl = document.getElementById('frame-count');
+        this.propsContainer = document.getElementById('editor-properties');
+        this.propsForm = document.getElementById('editor-props-form');
+        this.frameList = document.getElementById('frame-list');
+        this.propX = document.getElementById('prop-x');
+        this.propY = document.getElementById('prop-y');
+        this.propW = document.getElementById('prop-w');
+        this.propH = document.getElementById('prop-h');
+        this.editorTitle = document.getElementById('editor-title');
+    }
+
+    _bindEvents() {
+        this.addFrameBtn.addEventListener('click', () => this.addFrame());
+        this.removeFrameBtn.addEventListener('click', () => this.removeSelected());
+        this.saveBtn.addEventListener('click', () => this._save());
+        this.cancelBtn.addEventListener('click', () => this.close());
+        this.closeBtn.addEventListener('click', () => this.close());
+
+        this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
+        document.addEventListener('mousemove', (e) => this._onMouseMove(e));
+        document.addEventListener('mouseup', () => this._onMouseUp());
+
+        // Property inputs
+        [this.propX, this.propY, this.propW, this.propH].forEach(input => {
+            input.addEventListener('change', () => this._onPropChange());
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (this.modal.style.display === 'none') return;
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (document.activeElement.tagName !== 'INPUT') {
+                    this.removeSelected();
+                }
+            }
+            if (e.key === 'Escape') this.close();
+        });
+    }
+
+    open(existingLayout = null, onSave = null) {
+        this.onSaveCallback = onSave;
+        if (existingLayout) {
+            this.editingPresetId = existingLayout.id;
+            this.frames = existingLayout.frames.map(f => ({ ...f }));
+            this.nameInput.value = existingLayout.name;
+            this.editorTitle.textContent = 'Edit Layout';
+        } else {
+            this.editingPresetId = null;
+            this.frames = [];
+            this.nameInput.value = '';
+            this.editorTitle.textContent = 'Create Layout';
+        }
+        this.selectedIndex = null;
+        this.modal.style.display = '';
+        this.render();
+    }
+
+    close() {
+        this.modal.style.display = 'none';
+        this.mode = null;
+    }
+
+    addFrame() {
+        // Place new frame in center with reasonable size
+        const frame = { x: 20, y: 15, w: 60, h: 70 };
+        // Offset if multiple frames exist to avoid perfect overlap
+        const offset = (this.frames.length % 5) * 5;
+        frame.x = 10 + offset;
+        frame.y = 10 + offset;
+        frame.w = 40;
+        frame.h = 50;
+        this.frames.push(frame);
+        this.selectedIndex = this.frames.length - 1;
+        this.render();
+    }
+
+    removeSelected() {
+        if (this.selectedIndex === null) return;
+        this.frames.splice(this.selectedIndex, 1);
+        this.selectedIndex = null;
+        this.render();
+    }
+
+    _save() {
+        const name = this.nameInput.value.trim();
+        if (!name) {
+            this.nameInput.focus();
+            this.nameInput.style.borderColor = '#dc3545';
+            setTimeout(() => this.nameInput.style.borderColor = '', 1500);
+            return;
+        }
+        if (this.frames.length === 0) {
+            alert('Add at least one frame to save a layout.');
+            return;
+        }
+
+        const layout = {
+            id: this.editingPresetId || ('custom-' + Date.now()),
+            name: name,
+            isDefault: false,
+            frames: this.frames.map(f => ({
+                x: Math.round(f.x * 10) / 10,
+                y: Math.round(f.y * 10) / 10,
+                w: Math.round(f.w * 10) / 10,
+                h: Math.round(f.h * 10) / 10
+            }))
+        };
+
+        if (this.onSaveCallback) this.onSaveCallback(layout);
+        this.close();
+    }
+
+    // --- Rendering ---
+
+    render() {
+        // Clear existing frame elements
+        this.canvas.querySelectorAll('.frame-box').forEach(el => el.remove());
+
+        this.frames.forEach((frame, i) => {
+            const el = document.createElement('div');
+            el.className = 'frame-box' + (i === this.selectedIndex ? ' selected' : '');
+            el.style.left = frame.x + '%';
+            el.style.top = frame.y + '%';
+            el.style.width = frame.w + '%';
+            el.style.height = frame.h + '%';
+            el.dataset.index = i;
+
+            // Label
+            const label = document.createElement('span');
+            label.className = 'frame-box-label';
+            label.textContent = i + 1;
+            el.appendChild(label);
+
+            // Resize handles (only for selected)
+            if (i === this.selectedIndex) {
+                ['nw', 'ne', 'sw', 'se', 'n', 's', 'e', 'w'].forEach(dir => {
+                    const h = document.createElement('div');
+                    h.className = 'resize-handle ' + dir;
+                    h.dataset.handle = dir;
+                    el.appendChild(h);
+                });
+            }
+
+            this.canvas.appendChild(el);
+        });
+
+        // Update UI
+        this.frameCountEl.textContent = this.frames.length + ' frame' + (this.frames.length !== 1 ? 's' : '');
+        this.removeFrameBtn.disabled = this.selectedIndex === null;
+        this._updateProperties();
+        this._renderFrameList();
+    }
+
+    _updateProperties() {
+        if (this.selectedIndex === null) {
+            this.propsContainer.style.display = '';
+            this.propsForm.style.display = 'none';
+        } else {
+            this.propsContainer.style.display = 'none';
+            this.propsForm.style.display = '';
+            const f = this.frames[this.selectedIndex];
+            this.propX.value = Math.round(f.x * 10) / 10;
+            this.propY.value = Math.round(f.y * 10) / 10;
+            this.propW.value = Math.round(f.w * 10) / 10;
+            this.propH.value = Math.round(f.h * 10) / 10;
+        }
+    }
+
+    _renderFrameList() {
+        this.frameList.innerHTML = '';
+        this.frames.forEach((f, i) => {
+            const item = document.createElement('div');
+            item.className = 'frame-list-item' + (i === this.selectedIndex ? ' active' : '');
+            item.innerHTML = `
+                <span>Frame ${i + 1}</span>
+                <span class="frame-dims">${Math.round(f.w)}% × ${Math.round(f.h)}%</span>
+            `;
+            item.addEventListener('click', () => {
+                this.selectedIndex = i;
+                this.render();
+            });
+            this.frameList.appendChild(item);
+        });
+    }
+
+    _onPropChange() {
+        if (this.selectedIndex === null) return;
+        const f = this.frames[this.selectedIndex];
+        f.x = this._clamp(parseFloat(this.propX.value) || 0, 0, 100 - 5);
+        f.y = this._clamp(parseFloat(this.propY.value) || 0, 0, 100 - 5);
+        f.w = this._clamp(parseFloat(this.propW.value) || 5, 5, 100 - f.x);
+        f.h = this._clamp(parseFloat(this.propH.value) || 5, 5, 100 - f.y);
+        this.render();
+    }
+
+    // --- Mouse Interactions ---
+
+    _onMouseDown(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const mx = ((e.clientX - rect.left) / rect.width) * 100;
+        const my = ((e.clientY - rect.top) / rect.height) * 100;
+
+        // Check resize handles first
+        if (this.selectedIndex !== null) {
+            const handleEl = e.target.closest('.resize-handle');
+            if (handleEl) {
+                this.mode = 'resize';
+                this.resizeDir = handleEl.dataset.handle;
+                this.startMouse = { x: mx, y: my };
+                this.startFrame = { ...this.frames[this.selectedIndex] };
+                e.preventDefault();
+                return;
+            }
+        }
+
+        // Check if clicking on a frame
+        const frameEl = e.target.closest('.frame-box');
+        if (frameEl) {
+            const idx = parseInt(frameEl.dataset.index);
+            this.selectedIndex = idx;
+            this.mode = 'drag';
+            this.startMouse = { x: mx, y: my };
+            this.startFrame = { ...this.frames[idx] };
+            this.render();
+            e.preventDefault();
+            return;
+        }
+
+        // Clicked empty space
+        this.selectedIndex = null;
+        this.render();
+    }
+
+    _onMouseMove(e) {
+        if (!this.mode || this.selectedIndex === null) return;
+
+        const rect = this.canvas.getBoundingClientRect();
+        const mx = ((e.clientX - rect.left) / rect.width) * 100;
+        const my = ((e.clientY - rect.top) / rect.height) * 100;
+
+        const dx = mx - this.startMouse.x;
+        const dy = my - this.startMouse.y;
+        const frame = this.frames[this.selectedIndex];
+        const s = this.startFrame;
+        const MIN = 5;
+
+        if (this.mode === 'drag') {
+            frame.x = this._clamp(s.x + dx, 0, 100 - s.w);
+            frame.y = this._clamp(s.y + dy, 0, 100 - s.h);
+        } else if (this.mode === 'resize') {
+            let x = s.x, y = s.y, w = s.w, h = s.h;
+
+            // Left edge (w, nw, sw)
+            if (this.resizeDir.includes('w')) {
+                let newX = this._clamp(s.x + dx, 0, s.x + s.w - MIN);
+                w = s.x + s.w - newX;
+                x = newX;
+            }
+            // Right edge (e, ne, se)
+            if (this.resizeDir.includes('e') && !this.resizeDir.includes('w')) {
+                w = this._clamp(s.w + dx, MIN, 100 - s.x);
+            }
+            // Top edge (n, nw, ne)
+            if (this.resizeDir.includes('n')) {
+                let newY = this._clamp(s.y + dy, 0, s.y + s.h - MIN);
+                h = s.y + s.h - newY;
+                y = newY;
+            }
+            // Bottom edge (s, sw, se)
+            if (this.resizeDir.includes('s') && !this.resizeDir.includes('n')) {
+                h = this._clamp(s.h + dy, MIN, 100 - s.y);
+            }
+
+            frame.x = x; frame.y = y; frame.w = w; frame.h = h;
+        }
+
+        this.render();
+        e.preventDefault();
+    }
+
+    _onMouseUp() {
+        this.mode = null;
+        this.resizeDir = null;
+    }
+
+    _clamp(val, min, max) {
+        return Math.max(min, Math.min(max, val));
+    }
+}
+
+
+// ===================== PHOTO-FRAME MATCHING =====================
+
+/**
+ * Utility to get image dimensions from a File, with caching.
+ * Returns { width, height, aspect } where aspect = width / height.
+ */
+class ImageAnalyzer {
+    constructor() {
+        this._cache = new Map(); // file -> { width, height, aspect }
+    }
+
+    /**
+     * Get dimensions for a single photo.
+     */
+    getDimensions(photo) {
+        if (this._cache.has(photo.file)) {
+            return Promise.resolve(this._cache.get(photo.file));
+        }
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            const url = photo.objectUrl || URL.createObjectURL(photo.file);
+            img.onload = () => {
+                const dims = {
+                    width: img.naturalWidth,
+                    height: img.naturalHeight,
+                    aspect: img.naturalWidth / img.naturalHeight
+                };
+                this._cache.set(photo.file, dims);
+                if (!photo.objectUrl) URL.revokeObjectURL(url);
+                resolve(dims);
+            };
+            img.onerror = () => {
+                if (!photo.objectUrl) URL.revokeObjectURL(url);
+                // Fallback: assume square so it still works
+                const dims = { width: 100, height: 100, aspect: 1 };
+                this._cache.set(photo.file, dims);
+                resolve(dims);
+            };
+            img.src = url;
+        });
+    }
+
+    /**
+     * Pre-analyze all photos in batch. Loads dimensions in parallel (batches of 20).
+     */
+    async analyzeAll(photos, onProgress) {
+        const BATCH = 20;
+        for (let i = 0; i < photos.length; i += BATCH) {
+            const batch = photos.slice(i, i + BATCH);
+            await Promise.all(batch.map(p => this.getDimensions(p)));
+            if (onProgress) onProgress(Math.min(1, (i + BATCH) / photos.length));
+        }
+    }
+
+    /**
+     * Smart-match a batch of photos to a layout's frames.
+     * Returns a reordered copy of the photos array where each index
+     * corresponds to the best-fitting frame at that index.
+     *
+     * Uses greedy matching: for each frame (sorted by most "extreme" aspect
+     * ratio first — very wide or very tall), pick the remaining photo whose
+     * aspect ratio is closest.
+     */
+    matchPhotosToFrames(photos, frames) {
+        if (photos.length === 0 || frames.length === 0) return photos;
+        const n = Math.min(photos.length, frames.length);
+
+        // Compute frame aspects
+        const frameAspects = frames.map(f => (f.w / f.h));
+
+        // Get photo aspects from cache
+        const photoAspects = photos.map(p => {
+            const dims = this._cache.get(p.file);
+            return dims ? dims.aspect : 1;
+        });
+
+        // Build index arrays
+        const result = new Array(n);
+        const usedPhotos = new Set();
+
+        // Sort frame indices by how extreme their aspect ratio is
+        // (most landscape or most portrait first — they're pickiest)
+        const frameOrder = Array.from({ length: n }, (_, i) => i);
+        frameOrder.sort((a, b) => {
+            const distA = Math.abs(Math.log(frameAspects[a]));
+            const distB = Math.abs(Math.log(frameAspects[b]));
+            return distB - distA; // most extreme first
+        });
+
+        for (const fi of frameOrder) {
+            const fa = frameAspects[fi];
+            let bestIdx = -1;
+            let bestScore = Infinity;
+
+            for (let pi = 0; pi < n; pi++) {
+                if (usedPhotos.has(pi)) continue;
+                // Score = how much the photo's aspect ratio differs from the frame's.
+                // Using log ratio so landscape vs portrait is symmetric.
+                const score = Math.abs(Math.log(photoAspects[pi]) - Math.log(fa));
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestIdx = pi;
+                }
+            }
+
+            if (bestIdx >= 0) {
+                result[fi] = photos[bestIdx];
+                usedPhotos.add(bestIdx);
+            }
+        }
+
+        // Fill any remaining slots (shouldn't happen, but safety)
+        for (let i = 0; i < n; i++) {
+            if (!result[i]) result[i] = photos[i];
+        }
+
+        return result;
+    }
+
+    clear() {
+        this._cache.clear();
+    }
+}
+
+// Global analyzer instance (caches across preview + export)
+const imageAnalyzer = new ImageAnalyzer();
+
+
+/**
+ * Build a shuffled infinite-ish layout sequence from the selected layouts.
+ * Returns an array big enough to cover `totalPhotos`.
+ * Layouts are shuffled in rounds: each round uses every layout once in random
+ * order, then reshuffles for the next round. This ensures variety without
+ * repeating the same layout back-to-back (when possible).
+ */
+function buildShuffledLayoutSequence(layouts, totalPhotos) {
+    if (layouts.length === 0) return [];
+    if (layouts.length === 1) {
+        // Only one layout, just repeat it enough times
+        const count = Math.ceil(totalPhotos / layouts[0].frames.length) + 1;
+        return Array(count).fill(layouts[0]);
+    }
+
+    const sequence = [];
+    let photosLeft = totalPhotos;
+
+    while (photosLeft > 0) {
+        // Shuffle a copy of the layouts for this round
+        const round = [...layouts];
+        for (let i = round.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [round[i], round[j]] = [round[j], round[i]];
+        }
+
+        // Avoid repeating the last layout of the previous round
+        if (sequence.length > 0 && round[0] === sequence[sequence.length - 1] && round.length > 1) {
+            // Swap first with a random other position
+            const swapIdx = 1 + Math.floor(Math.random() * (round.length - 1));
+            [round[0], round[swapIdx]] = [round[swapIdx], round[0]];
+        }
+
+        for (const layout of round) {
+            sequence.push(layout);
+            photosLeft -= layout.frames.length;
+            if (photosLeft <= 0) break;
+        }
+    }
+
+    return sequence;
+}
+
+
+// ===================== PDF GENERATOR =====================
+
+class PDFGenerator {
+
+    /**
+     * Generate a PDF slideshow.
+     * @param {Array<{file:File, name:string}>} photos
+     * @param {Array<{frames:Array}>} layoutSequence
+     * @param {object} options - { bgColor, quality, slideSize }
+     * @param {function} onProgress - callback(fraction, message)
+     * @returns {Promise<Uint8Array>} PDF bytes
+     */
+    static async generate(photos, layoutSequence, options, onProgress) {
+        const { PDFDocument, rgb } = PDFLib;
+        const pdfDoc = await PDFDocument.create();
+
+        const slideSize = SLIDE_SIZES[options.slideSize] || SLIDE_SIZES['16:9'];
+        const SW = slideSize.width;
+        const SH = slideSize.height;
+        const qualitySettings = QUALITY_MAP[options.quality] || QUALITY_MAP.medium;
+        const bgRGB = PDFGenerator._hexToRgb(options.bgColor);
+
+        // Pre-analyze all photo dimensions for smart matching
+        onProgress(0, 'Analyzing photo orientations...');
+        await imageAnalyzer.analyzeAll(photos, (pct) => {
+            onProgress(pct * 0.05, `Analyzing photo orientations... ${Math.round(pct * 100)}%`);
+        });
+
+        let photoIdx = 0;
+        const total = photos.length;
+        let slideNum = 0;
+
+        // Build a shuffled layout sequence so slide types vary randomly
+        const shuffledLayouts = buildShuffledLayoutSequence(layoutSequence, total);
+
+        onProgress(0.05, 'Generating slides...');
+
+        while (photoIdx < total) {
+            const layout = shuffledLayouts[slideNum] || layoutSequence[slideNum % layoutSequence.length];
+            slideNum++;
+
+            const page = pdfDoc.addPage([SW, SH]);
+
+            // Background
+            page.drawRectangle({
+                x: 0, y: 0, width: SW, height: SH,
+                color: rgb(bgRGB.r / 255, bgRGB.g / 255, bgRGB.b / 255)
+            });
+
+            // Grab the batch of photos for this slide and smart-match to frames
+            const batchSize = Math.min(layout.frames.length, total - photoIdx);
+            const batchPhotos = photos.slice(photoIdx, photoIdx + batchSize);
+            const matched = imageAnalyzer.matchPhotosToFrames(batchPhotos, layout.frames);
+
+            for (let fi = 0; fi < layout.frames.length; fi++) {
+                if (fi >= matched.length) break;
+                const frame = layout.frames[fi];
+                const photo = matched[fi];
+                photoIdx++;
+
+                try {
+                    const frameW = (frame.w / 100) * SW;
+                    const frameH = (frame.h / 100) * SH;
+                    const frameX = (frame.x / 100) * SW;
+                    // PDF origin is bottom-left
+                    const frameY = SH - (frame.y / 100) * SH - frameH;
+
+                    const frameAspect = frameW / frameH;
+                    const maxPixelW = Math.round(frameW * qualitySettings.dpiScale);
+
+                    const imageBytes = await PDFGenerator._cropImage(
+                        photo.file, frameAspect, maxPixelW, qualitySettings.jpegQuality
+                    );
+
+                    const image = await pdfDoc.embedJpg(imageBytes);
+
+                    page.drawImage(image, {
+                        x: frameX,
+                        y: frameY,
+                        width: frameW,
+                        height: frameH
+                    });
+                } catch (err) {
+                    console.warn(`Skipped photo "${photo.name}":`, err.message);
+                }
+
+                const pct = 0.05 + (photoIdx / total) * 0.93;
+                onProgress(pct, `Processing photo ${photoIdx} of ${total} (slide ${slideNum})...`);
+
+                // Yield to UI thread periodically
+                if (photoIdx % 5 === 0) {
+                    await new Promise(r => setTimeout(r, 0));
+                }
+            }
+        }
+
+        onProgress(0.98, 'Finalizing PDF...');
+        const pdfBytes = await pdfDoc.save();
+        onProgress(1, 'Done!');
+        return pdfBytes;
+    }
+
+    /**
+     * Crop an image file to match a target aspect ratio, center-cropped.
+     * Returns JPEG ArrayBuffer.
+     */
+    static _cropImage(file, targetAspect, maxWidth, jpegQuality) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            const url = URL.createObjectURL(file);
+
+            img.onload = () => {
+                try {
+                    const imgW = img.naturalWidth;
+                    const imgH = img.naturalHeight;
+                    const imgAspect = imgW / imgH;
+
+                    let cropX, cropY, cropW, cropH;
+
+                    if (imgAspect > targetAspect) {
+                        cropH = imgH;
+                        cropW = Math.round(imgH * targetAspect);
+                        cropX = Math.round((imgW - cropW) / 2);
+                        cropY = 0;
+                    } else {
+                        cropW = imgW;
+                        cropH = Math.round(imgW / targetAspect);
+                        cropX = 0;
+                        cropY = Math.round((imgH - cropH) / 2);
+                    }
+
+                    let outW = Math.min(cropW, maxWidth);
+                    let outH = Math.round(outW / targetAspect);
+
+                    // Ensure minimum dimensions
+                    if (outW < 10) outW = 10;
+                    if (outH < 10) outH = 10;
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = outW;
+                    canvas.height = outH;
+                    const ctx = canvas.getContext('2d');
+
+                    ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
+
+                    canvas.toBlob(
+                        (blob) => {
+                            URL.revokeObjectURL(url);
+                            if (!blob) {
+                                reject(new Error('Canvas toBlob failed'));
+                                return;
+                            }
+                            blob.arrayBuffer().then(resolve).catch(reject);
+                        },
+                        'image/jpeg',
+                        jpegQuality
+                    );
+                } catch (err) {
+                    URL.revokeObjectURL(url);
+                    reject(err);
+                }
+            };
+
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                reject(new Error(`Failed to load image: ${file.name}`));
+            };
+
+            img.src = url;
+        });
+    }
+
+    static _hexToRgb(hex) {
+        hex = hex.replace('#', '');
+        return {
+            r: parseInt(hex.substring(0, 2), 16),
+            g: parseInt(hex.substring(2, 4), 16),
+            b: parseInt(hex.substring(4, 6), 16)
+        };
+    }
+}
+
+
+// ===================== PREVIEW RENDERER =====================
+
+class PreviewRenderer {
+    /**
+     * Render a slide preview onto a canvas.
+     */
+    static async renderSlide(photos, layout, bgColor, canvasWidth) {
+        const aspect = 16 / 9;
+        const canvasHeight = Math.round(canvasWidth / aspect);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        const ctx = canvas.getContext('2d');
+
+        // Background
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+        // Smart-match photos to frames by aspect ratio
+        await imageAnalyzer.analyzeAll(photos);
+        const matched = imageAnalyzer.matchPhotosToFrames(photos, layout.frames);
+
+        for (let i = 0; i < layout.frames.length && i < matched.length; i++) {
+            const frame = layout.frames[i];
+            const photo = matched[i];
+
+            const fx = (frame.x / 100) * canvasWidth;
+            const fy = (frame.y / 100) * canvasHeight;
+            const fw = (frame.w / 100) * canvasWidth;
+            const fh = (frame.h / 100) * canvasHeight;
+
+            try {
+                const img = await PreviewRenderer._loadImage(photo.file);
+                const frameAspect = fw / fh;
+                const imgAspect = img.naturalWidth / img.naturalHeight;
+
+                let sx, sy, sw, sh;
+                if (imgAspect > frameAspect) {
+                    sh = img.naturalHeight;
+                    sw = Math.round(sh * frameAspect);
+                    sx = Math.round((img.naturalWidth - sw) / 2);
+                    sy = 0;
+                } else {
+                    sw = img.naturalWidth;
+                    sh = Math.round(sw / frameAspect);
+                    sx = 0;
+                    sy = Math.round((img.naturalHeight - sh) / 2);
+                }
+
+                ctx.drawImage(img, sx, sy, sw, sh, fx, fy, fw, fh);
+            } catch (err) {
+                // Draw placeholder
+                ctx.fillStyle = '#ddd';
+                ctx.fillRect(fx, fy, fw, fh);
+                ctx.fillStyle = '#999';
+                ctx.font = '14px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('Error', fx + fw / 2, fy + fh / 2);
+            }
+        }
+
+        // Draw empty frames
+        for (let i = photos.length; i < layout.frames.length; i++) {
+            const frame = layout.frames[i];
+            const fx = (frame.x / 100) * canvasWidth;
+            const fy = (frame.y / 100) * canvasHeight;
+            const fw = (frame.w / 100) * canvasWidth;
+            const fh = (frame.h / 100) * canvasHeight;
+            ctx.fillStyle = '#e0e0e0';
+            ctx.fillRect(fx, fy, fw, fh);
+        }
+
+        return canvas;
+    }
+
+    static _loadImage(file) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            const url = URL.createObjectURL(file);
+            img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Failed to load')); };
+            img.src = url;
+        });
+    }
+}
+
+
+// ===================== MAIN APP =====================
+
+class App {
+    constructor() {
+        this.photos = [];
+        this.customLayouts = [];
+        this.selectedLayoutIds = new Set();
+        this.layoutEditor = new LayoutEditor();
+
+        this._loadCustomLayouts();
+        this._bindTabs();
+        this._bindPhotoUpload();
+        this._bindGenerate();
+        this._bindLayoutCreation();
+
+        this._renderDefaultLayouts();
+        this._renderCustomLayouts();
+    }
+
+    // --- Tab Navigation ---
+
+    _bindTabs() {
+        document.querySelectorAll('.tab').forEach(tabBtn => {
+            tabBtn.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+                tabBtn.classList.add('active');
+                const panel = document.getElementById(tabBtn.dataset.tab + '-tab');
+                panel.classList.add('active');
+
+                if (tabBtn.dataset.tab === 'generate') {
+                    this._refreshGenerateTab();
+                }
+            });
+        });
+    }
+
+    // --- Layout Management ---
+
+    _bindLayoutCreation() {
+        document.getElementById('create-layout-btn').addEventListener('click', () => {
+            this.layoutEditor.open(null, (layout) => this._saveCustomLayout(layout));
+        });
+    }
+
+    _saveCustomLayout(layout) {
+        const idx = this.customLayouts.findIndex(l => l.id === layout.id);
+        if (idx >= 0) {
+            this.customLayouts[idx] = layout;
+        } else {
+            this.customLayouts.push(layout);
+        }
+        this._persistCustomLayouts();
+        this._renderCustomLayouts();
+    }
+
+    _deleteCustomLayout(id) {
+        this.customLayouts = this.customLayouts.filter(l => l.id !== id);
+        this.selectedLayoutIds.delete(id);
+        this._persistCustomLayouts();
+        this._renderCustomLayouts();
+    }
+
+    _persistCustomLayouts() {
+        try {
+            localStorage.setItem('slideshowCustomLayouts', JSON.stringify(this.customLayouts));
+        } catch (e) { /* localStorage may be unavailable */ }
+    }
+
+    _loadCustomLayouts() {
+        try {
+            const data = localStorage.getItem('slideshowCustomLayouts');
+            if (data) this.customLayouts = JSON.parse(data);
+        } catch (e) { /* ignore */ }
+    }
+
+    _getAllLayouts() {
+        return [...DEFAULT_LAYOUTS, ...this.customLayouts];
+    }
+
+    _renderDefaultLayouts() {
+        const container = document.getElementById('default-layouts');
+        container.innerHTML = '';
+        DEFAULT_LAYOUTS.forEach(layout => {
+            container.appendChild(this._createLayoutCard(layout, false));
+        });
+    }
+
+    _renderCustomLayouts() {
+        const container = document.getElementById('custom-layouts');
+        container.innerHTML = '';
+        const noMsg = document.getElementById('no-custom-msg');
+
+        if (this.customLayouts.length === 0) {
+            if (!noMsg) {
+                const p = document.createElement('p');
+                p.className = 'empty-msg';
+                p.id = 'no-custom-msg';
+                p.textContent = 'No custom layouts yet. Click the button above to create one.';
+                container.appendChild(p);
+            } else {
+                container.appendChild(noMsg);
+            }
+            return;
+        }
+
+        this.customLayouts.forEach(layout => {
+            container.appendChild(this._createLayoutCard(layout, true));
+        });
+    }
+
+    _createLayoutCard(layout, isCustom) {
+        const card = document.createElement('div');
+        card.className = 'layout-card';
+
+        // Thumbnail
+        const thumb = document.createElement('div');
+        thumb.className = 'layout-thumbnail';
+        layout.frames.forEach((frame, i) => {
+            const box = document.createElement('div');
+            box.className = 'frame-preview frame-color-' + (i % FRAME_COLORS.length);
+            box.style.left = frame.x + '%';
+            box.style.top = frame.y + '%';
+            box.style.width = frame.w + '%';
+            box.style.height = frame.h + '%';
+            box.textContent = i + 1;
+            thumb.appendChild(box);
+        });
+        card.appendChild(thumb);
+
+        // Name
+        const name = document.createElement('div');
+        name.className = 'layout-card-name';
+        name.textContent = layout.name;
+        card.appendChild(name);
+
+        // Count
+        const count = document.createElement('div');
+        count.className = 'layout-card-count';
+        count.textContent = layout.frames.length + ' photo' + (layout.frames.length !== 1 ? 's' : '') + ' per slide';
+        card.appendChild(count);
+
+        // Actions for custom layouts
+        if (isCustom) {
+            const actions = document.createElement('div');
+            actions.className = 'layout-card-actions';
+
+            const editBtn = document.createElement('button');
+            editBtn.className = 'btn btn-primary btn-sm';
+            editBtn.textContent = 'Edit';
+            editBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.layoutEditor.open(layout, (updated) => this._saveCustomLayout(updated));
+            });
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'btn btn-danger btn-sm';
+            delBtn.textContent = 'Delete';
+            delBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (confirm(`Delete layout "${layout.name}"?`)) {
+                    this._deleteCustomLayout(layout.id);
+                }
+            });
+
+            actions.appendChild(editBtn);
+            actions.appendChild(delBtn);
+            card.appendChild(actions);
+        }
+
+        return card;
+    }
+
+    // --- Photo Upload ---
+
+    _bindPhotoUpload() {
+        const uploadZone = document.getElementById('upload-zone');
+        const fileInput = document.getElementById('file-input');
+        const folderInput = document.getElementById('folder-input');
+        const clearBtn = document.getElementById('clear-photos-btn');
+        const sortBtn = document.getElementById('sort-name-btn');
+
+        // File input
+        fileInput.addEventListener('change', (e) => {
+            this._addFiles(e.target.files);
+            fileInput.value = '';
+        });
+
+        // Folder input
+        folderInput.addEventListener('change', (e) => {
+            this._addFiles(e.target.files);
+            folderInput.value = '';
+        });
+
+        // Drag and drop
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('drag-over');
+        });
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('drag-over');
+        });
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('drag-over');
+            if (e.dataTransfer.files) {
+                this._addFiles(e.dataTransfer.files);
+            }
+        });
+
+        // Clear all
+        clearBtn.addEventListener('click', () => {
+            if (confirm('Remove all uploaded photos?')) {
+                this._clearPhotos();
+            }
+        });
+
+        // Sort by name
+        sortBtn.addEventListener('click', () => {
+            this.photos.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+            this._renderPhotos();
+        });
+    }
+
+    _addFiles(fileList) {
+        const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff'];
+        for (const file of fileList) {
+            if (imageTypes.includes(file.type) || file.type.startsWith('image/')) {
+                this.photos.push({
+                    file: file,
+                    name: file.name,
+                    objectUrl: URL.createObjectURL(file)
+                });
+            }
+        }
+        this._renderPhotos();
+    }
+
+    _clearPhotos() {
+        this.photos.forEach(p => URL.revokeObjectURL(p.objectUrl));
+        this.photos = [];
+        this._renderPhotos();
+    }
+
+    _removePhoto(index) {
+        URL.revokeObjectURL(this.photos[index].objectUrl);
+        this.photos.splice(index, 1);
+        this._renderPhotos();
+    }
+
+    _renderPhotos() {
+        const grid = document.getElementById('photos-grid');
+        const toolbar = document.getElementById('photos-toolbar');
+        const countEl = document.getElementById('photo-count');
+
+        grid.innerHTML = '';
+        countEl.textContent = this.photos.length;
+        toolbar.style.display = this.photos.length > 0 ? '' : 'none';
+
+        this.photos.forEach((photo, i) => {
+            const thumb = document.createElement('div');
+            thumb.className = 'photo-thumb';
+
+            const img = document.createElement('img');
+            img.src = photo.objectUrl;
+            img.alt = photo.name;
+            img.loading = 'lazy';
+            thumb.appendChild(img);
+
+            const nameEl = document.createElement('div');
+            nameEl.className = 'photo-name';
+            nameEl.textContent = photo.name;
+            thumb.appendChild(nameEl);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'remove-photo';
+            removeBtn.textContent = '×';
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._removePhoto(i);
+            });
+            thumb.appendChild(removeBtn);
+
+            grid.appendChild(thumb);
+        });
+    }
+
+    // --- Generate Tab ---
+
+    _bindGenerate() {
+        const bgInput = document.getElementById('bg-color');
+        const bgHex = document.getElementById('bg-color-hex');
+        bgInput.addEventListener('input', () => {
+            bgHex.textContent = bgInput.value;
+            this._updateSummary();
+        });
+
+        document.getElementById('image-quality').addEventListener('change', () => this._updateSummary());
+        document.getElementById('photo-order').addEventListener('change', () => this._updateSummary());
+        document.getElementById('slide-size').addEventListener('change', () => this._updateSummary());
+
+        document.getElementById('preview-btn').addEventListener('click', () => this._preview());
+        document.getElementById('export-btn').addEventListener('click', () => this._export());
+    }
+
+    _refreshGenerateTab() {
+        this._renderLayoutSelection();
+        this._updateSummary();
+    }
+
+    _renderLayoutSelection() {
+        const container = document.getElementById('layout-selection');
+        container.innerHTML = '';
+
+        const allLayouts = this._getAllLayouts();
+        allLayouts.forEach(layout => {
+            const card = document.createElement('div');
+            card.className = 'layout-select-card' + (this.selectedLayoutIds.has(layout.id) ? ' selected' : '');
+
+            const thumb = document.createElement('div');
+            thumb.className = 'mini-thumb';
+            layout.frames.forEach((frame, i) => {
+                const box = document.createElement('div');
+                box.className = 'frame-preview frame-color-' + (i % FRAME_COLORS.length);
+                box.style.left = frame.x + '%';
+                box.style.top = frame.y + '%';
+                box.style.width = frame.w + '%';
+                box.style.height = frame.h + '%';
+                thumb.appendChild(box);
+            });
+            card.appendChild(thumb);
+
+            const name = document.createElement('div');
+            name.className = 'layout-select-name';
+            name.textContent = layout.name;
+            card.appendChild(name);
+
+            card.addEventListener('click', () => {
+                if (this.selectedLayoutIds.has(layout.id)) {
+                    this.selectedLayoutIds.delete(layout.id);
+                    card.classList.remove('selected');
+                } else {
+                    this.selectedLayoutIds.add(layout.id);
+                    card.classList.add('selected');
+                }
+                this._updateSummary();
+            });
+
+            container.appendChild(card);
+        });
+    }
+
+    _getSelectedLayouts() {
+        const all = this._getAllLayouts();
+        return all.filter(l => this.selectedLayoutIds.has(l.id));
+    }
+
+    _updateSummary() {
+        const summaryEl = document.getElementById('generate-summary');
+        const selectedLayouts = this._getSelectedLayouts();
+        const photoCount = this.photos.length;
+
+        if (photoCount === 0 || selectedLayouts.length === 0) {
+            let msgs = [];
+            if (photoCount === 0) msgs.push('Upload photos in the Photos tab');
+            if (selectedLayouts.length === 0) msgs.push('Select at least one layout above');
+            summaryEl.innerHTML = `<span style="color:#e8590c">⚠ ${msgs.join(' and ')} to continue.</span>`;
+            return;
+        }
+
+        // Estimate total slides (average across selected layouts since order is random)
+        const avgFrames = selectedLayouts.reduce((s, l) => s + l.frames.length, 0) / selectedLayouts.length;
+        const slideCount = Math.ceil(photoCount / avgFrames);
+
+        const layoutNames = selectedLayouts.map(l => `"${l.name}"`).join(', ');
+        summaryEl.innerHTML = `
+            <strong>${photoCount}</strong> photos → ~<strong>${slideCount}</strong> slides<br>
+            Randomly mixing: ${layoutNames}<br>
+            Quality: <strong>${document.getElementById('image-quality').value}</strong> |
+            Size: <strong>${document.getElementById('slide-size').value}</strong> |
+            Background: <span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid #ccc;background:${document.getElementById('bg-color').value}"></span>
+        `;
+    }
+
+    _getOrderedPhotos() {
+        const order = document.getElementById('photo-order').value;
+        let photos = [...this.photos];
+        if (order === 'name') {
+            photos.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        } else if (order === 'shuffle') {
+            for (let i = photos.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [photos[i], photos[j]] = [photos[j], photos[i]];
+            }
+        }
+        return photos;
+    }
+
+    async _preview() {
+        const selectedLayouts = this._getSelectedLayouts();
+        if (selectedLayouts.length === 0) {
+            alert('Select at least one layout first.');
+            return;
+        }
+        if (this.photos.length === 0) {
+            alert('Upload photos first.');
+            return;
+        }
+
+        const previewArea = document.getElementById('preview-area');
+        const previewSlides = document.getElementById('preview-slides');
+        previewArea.style.display = '';
+        previewSlides.innerHTML = '<p style="padding:20px;color:#888;">Generating preview...</p>';
+
+        const photos = this._getOrderedPhotos();
+        const bgColor = document.getElementById('bg-color').value;
+        const maxPreviews = Math.min(8, Math.ceil(photos.length / selectedLayouts[0].frames.length));
+
+        await new Promise(r => setTimeout(r, 50)); // let UI update
+
+        previewSlides.innerHTML = '';
+        let photoIdx = 0;
+
+        // Shuffled layout order for preview
+        const shuffledLayouts = buildShuffledLayoutSequence(selectedLayouts, photos.length);
+
+        for (let i = 0; i < maxPreviews && photoIdx < photos.length; i++) {
+            const layout = shuffledLayouts[i] || selectedLayouts[i % selectedLayouts.length];
+            const slidePhotos = photos.slice(photoIdx, photoIdx + layout.frames.length);
+            photoIdx += layout.frames.length;
+
+            try {
+                const canvas = await PreviewRenderer.renderSlide(slidePhotos, layout, bgColor, 400);
+                canvas.className = 'preview-slide';
+                canvas.style.borderRadius = '6px';
+
+                const wrapper = document.createElement('div');
+                wrapper.style.flex = '0 0 auto';
+
+                const label = document.createElement('div');
+                label.className = 'preview-slide-label';
+                label.textContent = `Slide ${i + 1}`;
+
+                wrapper.appendChild(canvas);
+                wrapper.appendChild(label);
+                previewSlides.appendChild(wrapper);
+            } catch (err) {
+                console.warn('Preview error:', err);
+            }
+        }
+    }
+
+    async _export() {
+        const selectedLayouts = this._getSelectedLayouts();
+        if (selectedLayouts.length === 0) {
+            alert('Select at least one layout first.');
+            return;
+        }
+        if (this.photos.length === 0) {
+            alert('Upload photos first.');
+            return;
+        }
+
+        const exportBtn = document.getElementById('export-btn');
+        const progressContainer = document.getElementById('progress-container');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+
+        exportBtn.disabled = true;
+        progressContainer.style.display = '';
+        progressFill.style.width = '0%';
+
+        const photos = this._getOrderedPhotos();
+        const options = {
+            bgColor: document.getElementById('bg-color').value,
+            quality: document.getElementById('image-quality').value,
+            slideSize: document.getElementById('slide-size').value
+        };
+
+        try {
+            const pdfBytes = await PDFGenerator.generate(
+                photos,
+                selectedLayouts,
+                options,
+                (pct, msg) => {
+                    progressFill.style.width = Math.round(pct * 100) + '%';
+                    progressText.textContent = msg;
+                }
+            );
+
+            // Trigger download
+            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `slideshow_${new Date().toISOString().slice(0, 10)}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            progressText.textContent = `Done! ${Math.round(pdfBytes.length / 1024 / 1024 * 10) / 10} MB PDF downloaded.`;
+        } catch (err) {
+            console.error('PDF generation error:', err);
+            progressText.textContent = 'Error: ' + err.message;
+            progressFill.style.width = '0%';
+        }
+
+        exportBtn.disabled = false;
+    }
+}
+
+
+// ===================== INIT =====================
+
+document.addEventListener('DOMContentLoaded', () => {
+    window.app = new App();
+});

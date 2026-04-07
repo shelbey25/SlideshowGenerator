@@ -1,0 +1,1699 @@
+/* ============================================================
+   SLIDESHOW GENERATOR - APPLICATION
+   ============================================================
+   Single-file JS: Layout Editor + Face Detection + PDF Generator
+   ============================================================ */
+
+// ===================== CONSTANTS =====================
+
+const FRAME_COLORS = [
+    'rgba(74,144,217,0.5)', 'rgba(40,167,69,0.5)', 'rgba(232,89,12,0.5)',
+    'rgba(156,39,176,0.5)', 'rgba(255,193,7,0.6)', 'rgba(0,188,212,0.5)',
+    'rgba(244,67,54,0.5)', 'rgba(96,125,139,0.5)'
+];
+
+const QUALITY_MAP = {
+    high:   { dpiScale: 150 / 72, jpegQuality: 0.92 },
+    medium: { dpiScale: 100 / 72, jpegQuality: 0.85 },
+    low:    { dpiScale: 1,         jpegQuality: 0.75 }
+};
+
+const SLIDE_SIZES = {
+    '16:9': { width: 960, height: 540 },
+    '4:3':  { width: 720, height: 540 }
+};
+
+// Helper: compute actual pixel aspect ratio of a frame on a 16:9 slide
+// frameAspect = (w_pct * slideW) / (h_pct * slideH)
+function framePixelAspect(frame, slideRatio) {
+    const r = slideRatio || (960 / 540);
+    return (frame.w / frame.h) * r;
+}
+
+/*
+ * DEFAULT_LAYOUTS — Includes original generic layouts PLUS layouts
+ * specifically designed for mixed portrait/landscape photo sets
+ * (e.g., phone photos from events: ~53% portrait, ~43% landscape).
+ *
+ * Frame aspect ratios are tuned for common phone photo ratios:
+ *   3:4 portrait (0.75)  → frame w/h ≈ 0.42 on 16:9 slide
+ *   9:16 portrait (0.56) → frame w/h ≈ 0.32
+ *   4:3 landscape (1.33) → frame w/h ≈ 0.75
+ *   3:2 landscape (1.50) → frame w/h ≈ 0.84
+ */
+const DEFAULT_LAYOUTS = [
+    // ---- Generic layouts ----
+    {
+        id: 'default-1-full',
+        name: '1 Photo — Full',
+        isDefault: true,
+        frames: [{ x: 3, y: 4, w: 94, h: 92 }]
+    },
+    {
+        id: 'default-2-side',
+        name: '2 Photos — Side by Side',
+        isDefault: true,
+        frames: [
+            { x: 2, y: 4, w: 47, h: 92 },
+            { x: 51, y: 4, w: 47, h: 92 }
+        ]
+    },
+    {
+        id: 'default-2-stack',
+        name: '2 Photos — Stacked',
+        isDefault: true,
+        frames: [
+            { x: 3, y: 2, w: 94, h: 47 },
+            { x: 3, y: 51, w: 94, h: 47 }
+        ]
+    },
+    {
+        id: 'default-3-row',
+        name: '3 Photos — Row',
+        isDefault: true,
+        frames: [
+            { x: 1.5, y: 8, w: 31.5, h: 84 },
+            { x: 34.25, y: 8, w: 31.5, h: 84 },
+            { x: 67, y: 8, w: 31.5, h: 84 }
+        ]
+    },
+    {
+        id: 'default-4-grid',
+        name: '4 Photos — Grid',
+        isDefault: true,
+        frames: [
+            { x: 2, y: 3, w: 47, h: 45.5 },
+            { x: 51, y: 3, w: 47, h: 45.5 },
+            { x: 2, y: 51.5, w: 47, h: 45.5 },
+            { x: 51, y: 51.5, w: 47, h: 45.5 }
+        ]
+    },
+    {
+        id: 'default-6-grid',
+        name: '6 Photos — Grid',
+        isDefault: true,
+        frames: [
+            { x: 1.5, y: 3, w: 32, h: 45.5 },
+            { x: 34.5, y: 3, w: 32, h: 45.5 },
+            { x: 67.5, y: 3, w: 31, h: 45.5 },
+            { x: 1.5, y: 51.5, w: 32, h: 45.5 },
+            { x: 34.5, y: 51.5, w: 32, h: 45.5 },
+            { x: 67.5, y: 51.5, w: 31, h: 45.5 }
+        ]
+    },
+
+    // ---- Photo-optimized layouts (mixed portrait + landscape) ----
+
+    // 3 tall portrait frames in a row
+    // Each frame aspect ≈ 30/80*1.778 = 0.667 (matches 2:3 portrait)
+    {
+        id: 'opt-3p-row',
+        name: '3 Portraits — Row',
+        isDefault: true,
+        frames: [
+            { x: 2, y: 10, w: 30, h: 80 },
+            { x: 35, y: 10, w: 30, h: 80 },
+            { x: 68, y: 10, w: 30, h: 80 }
+        ]
+    },
+    // 2 portrait frames side by side (narrow + tall)
+    // Frame aspect ≈ 28/90*1.778 = 0.553 (matches 9:16 portrait)
+    {
+        id: 'opt-2p-tall',
+        name: '2 Portraits — Tall',
+        isDefault: true,
+        frames: [
+            { x: 12, y: 5, w: 28, h: 90 },
+            { x: 60, y: 5, w: 28, h: 90 }
+        ]
+    },
+    // 1 landscape on top + 2 portraits on bottom
+    // L top: 96×42 → aspect 96/42*1.778 = 4.06 (wide, but center-crop is fine for group shots)
+    // Actually let's make it a moderate landscape:
+    // L: 60×40 → 60/40*1.778 = 2.67 (wide landscape)
+    // P: 28×52 → 28/52*1.778 = 0.957 (squarish portrait — versatile)
+    {
+        id: 'opt-1l-2p',
+        name: '1 Landscape + 2 Portraits',
+        isDefault: true,
+        frames: [
+            { x: 20, y: 2, w: 60, h: 40 },
+            { x: 2, y: 46, w: 28, h: 52 },
+            { x: 70, y: 46, w: 28, h: 52 }
+        ]
+    },
+    // Big portrait left + 2 landscapes stacked right
+    // P: 38×92 → 38/92*1.778 = 0.735 (≈3:4 portrait ✓)
+    // L: 56×44 → 56/44*1.778 = 2.264 (wide landscape)
+    {
+        id: 'opt-1p-2l',
+        name: '1 Portrait + 2 Landscapes',
+        isDefault: true,
+        frames: [
+            { x: 2, y: 4, w: 38, h: 92 },
+            { x: 42, y: 4, w: 56, h: 44 },
+            { x: 42, y: 52, w: 56, h: 44 }
+        ]
+    },
+    // 2P + 2L mixed grid: portraits on left, landscapes on right
+    // P: 23×46 → 23/46*1.778 = 0.889 (portrait-leaning)
+    // L: 42×46 → 42/46*1.778 = 1.623 (landscape ≈3:2 ✓)
+    {
+        id: 'opt-2p-2l-grid',
+        name: '2 Portraits + 2 Landscapes',
+        isDefault: true,
+        frames: [
+            { x: 2, y: 3, w: 23, h: 46 },
+            { x: 2, y: 51, w: 23, h: 46 },
+            { x: 27, y: 3, w: 42, h: 46 },
+            { x: 27, y: 51, w: 42, h: 46 }
+        ]
+    },
+    // 5 photos: 2 landscapes top + 3 portraits bottom
+    // L: 48×40 → 48/40*1.778 = 2.134 (landscape)
+    // P: 22×54 → 22/54*1.778 = 0.724 (≈3:4 portrait ✓)
+    {
+        id: 'opt-2l-3p',
+        name: '2 Landscapes + 3 Portraits',
+        isDefault: true,
+        frames: [
+            { x: 1.5, y: 2, w: 48, h: 40 },
+            { x: 51, y: 2, w: 47.5, h: 40 },
+            { x: 1.5, y: 45, w: 22, h: 54 },
+            { x: 25, y: 45, w: 22, h: 54 },
+            { x: 76.5, y: 45, w: 22, h: 54 }
+        ]
+    },
+    // 4 portraits in a row (narrower frames)
+    // P: 23×80 → 23/80*1.778 = 0.511 (≈9:16 ✓)
+    {
+        id: 'opt-4p-row',
+        name: '4 Portraits — Row',
+        isDefault: true,
+        frames: [
+            { x: 1.5, y: 10, w: 23, h: 80 },
+            { x: 26.5, y: 10, w: 23, h: 80 },
+            { x: 51.5, y: 10, w: 23, h: 80 },
+            { x: 76.5, y: 10, w: 22, h: 80 }
+        ]
+    },
+    // Feature portrait center + 2 landscapes flanking
+    // P center: 32×90 → 32/90*1.778 = 0.632 (2:3 portrait)
+    // L: 32×44 → 32/44*1.778 = 1.293 (≈4:3 landscape ✓)
+    {
+        id: 'opt-feature-center',
+        name: 'Feature Portrait + 2 Landscapes',
+        isDefault: true,
+        frames: [
+            { x: 34, y: 5, w: 32, h: 90 },
+            { x: 1, y: 5, w: 32, h: 44 },
+            { x: 1, y: 51, w: 32, h: 44 },
+            { x: 67, y: 5, w: 32, h: 44 },
+            { x: 67, y: 51, w: 32, h: 44 }
+        ]
+    },
+    // Big landscape hero + row of 3 portraits below
+    // L: 96×48 → 96/48*1.778 = 3.556 (panoramic)
+    // P: 30×44 → 30/44*1.778 = 1.212 (slightly landscape)
+    // Better: P: 22×46 → 22/46*1.778 = 0.850 (portrait-ish)
+    {
+        id: 'opt-hero-3p',
+        name: 'Hero Landscape + 3 Below',
+        isDefault: true,
+        frames: [
+            { x: 2, y: 2, w: 96, h: 48 },
+            { x: 4, y: 53, w: 28, h: 44 },
+            { x: 36, y: 53, w: 28, h: 44 },
+            { x: 68, y: 53, w: 28, h: 44 }
+        ]
+    }
+];
+
+// ===================== LAYOUT EDITOR =====================
+
+class LayoutEditor {
+    constructor() {
+        this.modal = document.getElementById('layout-editor-modal');
+        this.canvas = document.getElementById('editor-canvas');
+        this.frames = [];
+        this.selectedIndex = null;
+        this.mode = null;          // 'drag' | 'resize' | null
+        this.resizeDir = null;     // 'nw','ne','sw','se','n','s','e','w'
+        this.startMouse = null;
+        this.startFrame = null;
+        this.editingPresetId = null;
+        this.onSaveCallback = null;
+
+        this._bindElements();
+        this._bindEvents();
+    }
+
+    _bindElements() {
+        this.addFrameBtn = document.getElementById('add-frame-btn');
+        this.removeFrameBtn = document.getElementById('remove-frame-btn');
+        this.saveBtn = document.getElementById('save-preset-btn');
+        this.cancelBtn = document.getElementById('cancel-editor-btn');
+        this.closeBtn = document.getElementById('editor-close');
+        this.nameInput = document.getElementById('preset-name');
+        this.frameCountEl = document.getElementById('frame-count');
+        this.propsContainer = document.getElementById('editor-properties');
+        this.propsForm = document.getElementById('editor-props-form');
+        this.frameList = document.getElementById('frame-list');
+        this.propX = document.getElementById('prop-x');
+        this.propY = document.getElementById('prop-y');
+        this.propW = document.getElementById('prop-w');
+        this.propH = document.getElementById('prop-h');
+        this.editorTitle = document.getElementById('editor-title');
+    }
+
+    _bindEvents() {
+        this.addFrameBtn.addEventListener('click', () => this.addFrame());
+        this.removeFrameBtn.addEventListener('click', () => this.removeSelected());
+        this.saveBtn.addEventListener('click', () => this._save());
+        this.cancelBtn.addEventListener('click', () => this.close());
+        this.closeBtn.addEventListener('click', () => this.close());
+
+        this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
+        document.addEventListener('mousemove', (e) => this._onMouseMove(e));
+        document.addEventListener('mouseup', () => this._onMouseUp());
+
+        // Property inputs
+        [this.propX, this.propY, this.propW, this.propH].forEach(input => {
+            input.addEventListener('change', () => this._onPropChange());
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (this.modal.style.display === 'none') return;
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (document.activeElement.tagName !== 'INPUT') {
+                    this.removeSelected();
+                }
+            }
+            if (e.key === 'Escape') this.close();
+        });
+    }
+
+    open(existingLayout = null, onSave = null) {
+        this.onSaveCallback = onSave;
+        if (existingLayout) {
+            this.editingPresetId = existingLayout.id;
+            this.frames = existingLayout.frames.map(f => ({ ...f }));
+            this.nameInput.value = existingLayout.name;
+            this.editorTitle.textContent = 'Edit Layout';
+        } else {
+            this.editingPresetId = null;
+            this.frames = [];
+            this.nameInput.value = '';
+            this.editorTitle.textContent = 'Create Layout';
+        }
+        this.selectedIndex = null;
+        this.modal.style.display = '';
+        this.render();
+    }
+
+    close() {
+        this.modal.style.display = 'none';
+        this.mode = null;
+    }
+
+    addFrame() {
+        // Place new frame in center with reasonable size
+        const frame = { x: 20, y: 15, w: 60, h: 70 };
+        // Offset if multiple frames exist to avoid perfect overlap
+        const offset = (this.frames.length % 5) * 5;
+        frame.x = 10 + offset;
+        frame.y = 10 + offset;
+        frame.w = 40;
+        frame.h = 50;
+        this.frames.push(frame);
+        this.selectedIndex = this.frames.length - 1;
+        this.render();
+    }
+
+    removeSelected() {
+        if (this.selectedIndex === null) return;
+        this.frames.splice(this.selectedIndex, 1);
+        this.selectedIndex = null;
+        this.render();
+    }
+
+    _save() {
+        const name = this.nameInput.value.trim();
+        if (!name) {
+            this.nameInput.focus();
+            this.nameInput.style.borderColor = '#dc3545';
+            setTimeout(() => this.nameInput.style.borderColor = '', 1500);
+            return;
+        }
+        if (this.frames.length === 0) {
+            alert('Add at least one frame to save a layout.');
+            return;
+        }
+
+        const layout = {
+            id: this.editingPresetId || ('custom-' + Date.now()),
+            name: name,
+            isDefault: false,
+            frames: this.frames.map(f => ({
+                x: Math.round(f.x * 10) / 10,
+                y: Math.round(f.y * 10) / 10,
+                w: Math.round(f.w * 10) / 10,
+                h: Math.round(f.h * 10) / 10
+            }))
+        };
+
+        if (this.onSaveCallback) this.onSaveCallback(layout);
+        this.close();
+    }
+
+    // --- Rendering ---
+
+    render() {
+        // Clear existing frame elements
+        this.canvas.querySelectorAll('.frame-box').forEach(el => el.remove());
+
+        this.frames.forEach((frame, i) => {
+            const el = document.createElement('div');
+            el.className = 'frame-box' + (i === this.selectedIndex ? ' selected' : '');
+            el.style.left = frame.x + '%';
+            el.style.top = frame.y + '%';
+            el.style.width = frame.w + '%';
+            el.style.height = frame.h + '%';
+            el.dataset.index = i;
+
+            // Label
+            const label = document.createElement('span');
+            label.className = 'frame-box-label';
+            label.textContent = i + 1;
+            el.appendChild(label);
+
+            // Resize handles (only for selected)
+            if (i === this.selectedIndex) {
+                ['nw', 'ne', 'sw', 'se', 'n', 's', 'e', 'w'].forEach(dir => {
+                    const h = document.createElement('div');
+                    h.className = 'resize-handle ' + dir;
+                    h.dataset.handle = dir;
+                    el.appendChild(h);
+                });
+            }
+
+            this.canvas.appendChild(el);
+        });
+
+        // Update UI
+        this.frameCountEl.textContent = this.frames.length + ' frame' + (this.frames.length !== 1 ? 's' : '');
+        this.removeFrameBtn.disabled = this.selectedIndex === null;
+        this._updateProperties();
+        this._renderFrameList();
+    }
+
+    _updateProperties() {
+        if (this.selectedIndex === null) {
+            this.propsContainer.style.display = '';
+            this.propsForm.style.display = 'none';
+        } else {
+            this.propsContainer.style.display = 'none';
+            this.propsForm.style.display = '';
+            const f = this.frames[this.selectedIndex];
+            this.propX.value = Math.round(f.x * 10) / 10;
+            this.propY.value = Math.round(f.y * 10) / 10;
+            this.propW.value = Math.round(f.w * 10) / 10;
+            this.propH.value = Math.round(f.h * 10) / 10;
+        }
+    }
+
+    _renderFrameList() {
+        this.frameList.innerHTML = '';
+        this.frames.forEach((f, i) => {
+            const item = document.createElement('div');
+            item.className = 'frame-list-item' + (i === this.selectedIndex ? ' active' : '');
+            item.innerHTML = `
+                <span>Frame ${i + 1}</span>
+                <span class="frame-dims">${Math.round(f.w)}% × ${Math.round(f.h)}%</span>
+            `;
+            item.addEventListener('click', () => {
+                this.selectedIndex = i;
+                this.render();
+            });
+            this.frameList.appendChild(item);
+        });
+    }
+
+    _onPropChange() {
+        if (this.selectedIndex === null) return;
+        const f = this.frames[this.selectedIndex];
+        f.x = this._clamp(parseFloat(this.propX.value) || 0, 0, 100 - 5);
+        f.y = this._clamp(parseFloat(this.propY.value) || 0, 0, 100 - 5);
+        f.w = this._clamp(parseFloat(this.propW.value) || 5, 5, 100 - f.x);
+        f.h = this._clamp(parseFloat(this.propH.value) || 5, 5, 100 - f.y);
+        this.render();
+    }
+
+    // --- Mouse Interactions ---
+
+    _onMouseDown(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const mx = ((e.clientX - rect.left) / rect.width) * 100;
+        const my = ((e.clientY - rect.top) / rect.height) * 100;
+
+        // Check resize handles first
+        if (this.selectedIndex !== null) {
+            const handleEl = e.target.closest('.resize-handle');
+            if (handleEl) {
+                this.mode = 'resize';
+                this.resizeDir = handleEl.dataset.handle;
+                this.startMouse = { x: mx, y: my };
+                this.startFrame = { ...this.frames[this.selectedIndex] };
+                e.preventDefault();
+                return;
+            }
+        }
+
+        // Check if clicking on a frame
+        const frameEl = e.target.closest('.frame-box');
+        if (frameEl) {
+            const idx = parseInt(frameEl.dataset.index);
+            this.selectedIndex = idx;
+            this.mode = 'drag';
+            this.startMouse = { x: mx, y: my };
+            this.startFrame = { ...this.frames[idx] };
+            this.render();
+            e.preventDefault();
+            return;
+        }
+
+        // Clicked empty space
+        this.selectedIndex = null;
+        this.render();
+    }
+
+    _onMouseMove(e) {
+        if (!this.mode || this.selectedIndex === null) return;
+
+        const rect = this.canvas.getBoundingClientRect();
+        const mx = ((e.clientX - rect.left) / rect.width) * 100;
+        const my = ((e.clientY - rect.top) / rect.height) * 100;
+
+        const dx = mx - this.startMouse.x;
+        const dy = my - this.startMouse.y;
+        const frame = this.frames[this.selectedIndex];
+        const s = this.startFrame;
+        const MIN = 5;
+
+        if (this.mode === 'drag') {
+            frame.x = this._clamp(s.x + dx, 0, 100 - s.w);
+            frame.y = this._clamp(s.y + dy, 0, 100 - s.h);
+        } else if (this.mode === 'resize') {
+            let x = s.x, y = s.y, w = s.w, h = s.h;
+
+            // Left edge (w, nw, sw)
+            if (this.resizeDir.includes('w')) {
+                let newX = this._clamp(s.x + dx, 0, s.x + s.w - MIN);
+                w = s.x + s.w - newX;
+                x = newX;
+            }
+            // Right edge (e, ne, se)
+            if (this.resizeDir.includes('e') && !this.resizeDir.includes('w')) {
+                w = this._clamp(s.w + dx, MIN, 100 - s.x);
+            }
+            // Top edge (n, nw, ne)
+            if (this.resizeDir.includes('n')) {
+                let newY = this._clamp(s.y + dy, 0, s.y + s.h - MIN);
+                h = s.y + s.h - newY;
+                y = newY;
+            }
+            // Bottom edge (s, sw, se)
+            if (this.resizeDir.includes('s') && !this.resizeDir.includes('n')) {
+                h = this._clamp(s.h + dy, MIN, 100 - s.y);
+            }
+
+            frame.x = x; frame.y = y; frame.w = w; frame.h = h;
+        }
+
+        this.render();
+        e.preventDefault();
+    }
+
+    _onMouseUp() {
+        this.mode = null;
+        this.resizeDir = null;
+    }
+
+    _clamp(val, min, max) {
+        return Math.max(min, Math.min(max, val));
+    }
+}
+
+
+// ===================== FACE DETECTOR =====================
+
+/**
+ * Simple face detection with Chrome FaceDetector API fallback to
+ * upper-third heuristic. Caches results per file.
+ *
+ * Returns a "focus point" { fx: 0-1, fy: 0-1 } representing
+ * where the center of attention is in the image. This is used
+ * to shift the crop window toward faces instead of always center-cropping.
+ */
+class FaceAwareCropper {
+    constructor() {
+        this._focusCache = new Map(); // file -> { fx, fy }
+        this._detector = null;
+        this._detectorChecked = false;
+        this._detectorAvailable = false;
+    }
+
+    async _initDetector() {
+        if (this._detectorChecked) return;
+        this._detectorChecked = true;
+        try {
+            if ('FaceDetector' in window) {
+                this._detector = new FaceDetector({ fastMode: true, maxDetectedFaces: 10 });
+                // Quick test to make sure it works
+                const testCanvas = document.createElement('canvas');
+                testCanvas.width = 10; testCanvas.height = 10;
+                await this._detector.detect(testCanvas);
+                this._detectorAvailable = true;
+                console.log('FaceDetector API available — using hardware face detection');
+            }
+        } catch (e) {
+            this._detectorAvailable = false;
+            console.log('FaceDetector API not available — using upper-third heuristic');
+        }
+    }
+
+    /**
+     * Get the focus point for a photo. Returns { fx: 0-1, fy: 0-1 }.
+     * fx=0.5, fy=0.5 means center. Shift toward detected faces.
+     */
+    async getFocusPoint(photo) {
+        if (this._focusCache.has(photo.file)) {
+            return this._focusCache.get(photo.file);
+        }
+
+        await this._initDetector();
+
+        let focus = { fx: 0.5, fy: 0.4 }; // default: slightly above center (faces tend to be upper portion)
+
+        if (this._detectorAvailable) {
+            try {
+                focus = await this._detectFaces(photo);
+            } catch (e) {
+                // Fallback on error
+            }
+        }
+
+        this._focusCache.set(photo.file, focus);
+        return focus;
+    }
+
+    /**
+     * Use FaceDetector API to find face bounding boxes,
+     * return the centroid of all faces as the focus point.
+     */
+    async _detectFaces(photo) {
+        return new Promise((resolve) => {
+            const img = new Image();
+            const url = photo.objectUrl || URL.createObjectURL(photo.file);
+
+            img.onload = async () => {
+                try {
+                    const faces = await this._detector.detect(img);
+                    if (!photo.objectUrl) URL.revokeObjectURL(url);
+
+                    if (faces.length === 0) {
+                        // No faces found — use upper-third heuristic
+                        resolve({ fx: 0.5, fy: 0.38 });
+                        return;
+                    }
+
+                    // Compute centroid of all face bounding boxes
+                    let sumX = 0, sumY = 0;
+                    for (const face of faces) {
+                        const cx = face.boundingBox.x + face.boundingBox.width / 2;
+                        const cy = face.boundingBox.y + face.boundingBox.height / 2;
+                        sumX += cx;
+                        sumY += cy;
+                    }
+                    const fx = (sumX / faces.length) / img.naturalWidth;
+                    const fy = (sumY / faces.length) / img.naturalHeight;
+
+                    // Clamp to reasonable range
+                    resolve({
+                        fx: Math.max(0.1, Math.min(0.9, fx)),
+                        fy: Math.max(0.1, Math.min(0.9, fy))
+                    });
+                } catch (e) {
+                    if (!photo.objectUrl) URL.revokeObjectURL(url);
+                    resolve({ fx: 0.5, fy: 0.38 });
+                }
+            };
+
+            img.onerror = () => {
+                if (!photo.objectUrl) URL.revokeObjectURL(url);
+                resolve({ fx: 0.5, fy: 0.4 });
+            };
+
+            img.src = url;
+        });
+    }
+
+    /**
+     * Pre-detect faces for all photos in batches.
+     */
+    async analyzeAll(photos, onProgress) {
+        const BATCH = 10;
+        for (let i = 0; i < photos.length; i += BATCH) {
+            const batch = photos.slice(i, i + BATCH);
+            await Promise.all(batch.map(p => this.getFocusPoint(p)));
+            if (onProgress) onProgress(Math.min(1, (i + BATCH) / photos.length));
+        }
+    }
+
+    clear() {
+        this._focusCache.clear();
+    }
+}
+
+const faceAwareCropper = new FaceAwareCropper();
+
+
+// ===================== IMAGE ANALYZER + SMART MATCHING =====================
+
+/**
+ * Analyzes image dimensions that caches results.
+ * Also handles smart matching of photos to frames and auto layout selection.
+ */
+class ImageAnalyzer {
+    constructor() {
+        this._cache = new Map(); // file -> { width, height, aspect }
+    }
+
+    getDimensions(photo) {
+        if (this._cache.has(photo.file)) {
+            return Promise.resolve(this._cache.get(photo.file));
+        }
+        return new Promise((resolve) => {
+            const img = new Image();
+            const url = photo.objectUrl || URL.createObjectURL(photo.file);
+            img.onload = () => {
+                const dims = {
+                    width: img.naturalWidth,
+                    height: img.naturalHeight,
+                    aspect: img.naturalWidth / img.naturalHeight
+                };
+                this._cache.set(photo.file, dims);
+                if (!photo.objectUrl) URL.revokeObjectURL(url);
+                resolve(dims);
+            };
+            img.onerror = () => {
+                if (!photo.objectUrl) URL.revokeObjectURL(url);
+                const dims = { width: 100, height: 100, aspect: 1 };
+                this._cache.set(photo.file, dims);
+                resolve(dims);
+            };
+            img.src = url;
+        });
+    }
+
+    async analyzeAll(photos, onProgress) {
+        const BATCH = 20;
+        for (let i = 0; i < photos.length; i += BATCH) {
+            const batch = photos.slice(i, i + BATCH);
+            await Promise.all(batch.map(p => this.getDimensions(p)));
+            if (onProgress) onProgress(Math.min(1, (i + BATCH) / photos.length));
+        }
+    }
+
+    /**
+     * Compute the TRUE pixel aspect ratio of a frame on the given slide.
+     */
+    getFrameAspect(frame, slideRatio) {
+        const r = slideRatio || (960 / 540);
+        return (frame.w / frame.h) * r;
+    }
+
+    /**
+     * Smart-match photos to frames by aspect ratio.
+     * Uses the slide aspect ratio to compute correct frame aspects.
+     */
+    matchPhotosToFrames(photos, frames, slideRatio) {
+        if (photos.length === 0 || frames.length === 0) return photos;
+        const n = Math.min(photos.length, frames.length);
+        const r = slideRatio || (960 / 540);
+
+        // True pixel aspect ratios
+        const frameAspects = frames.map(f => this.getFrameAspect(f, r));
+        const photoAspects = photos.map(p => {
+            const dims = this._cache.get(p.file);
+            return dims ? dims.aspect : 1;
+        });
+
+        const result = new Array(n);
+        const usedPhotos = new Set();
+
+        // Most extreme frames first (pickiest about orientation)
+        const frameOrder = Array.from({ length: n }, (_, i) => i);
+        frameOrder.sort((a, b) => {
+            return Math.abs(Math.log(frameAspects[b])) - Math.abs(Math.log(frameAspects[a]));
+        });
+
+        for (const fi of frameOrder) {
+            const fa = frameAspects[fi];
+            let bestIdx = -1;
+            let bestScore = Infinity;
+
+            for (let pi = 0; pi < n; pi++) {
+                if (usedPhotos.has(pi)) continue;
+                const score = Math.abs(Math.log(photoAspects[pi]) - Math.log(fa));
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestIdx = pi;
+                }
+            }
+
+            if (bestIdx >= 0) {
+                result[fi] = photos[bestIdx];
+                usedPhotos.add(bestIdx);
+            }
+        }
+
+        for (let i = 0; i < n; i++) {
+            if (!result[i]) result[i] = photos[i];
+        }
+        return result;
+    }
+
+    /**
+     * Score how well a batch of photos fits a layout.
+     * Lower score = less total cropping needed.
+     * Score = sum of |log(photoAspect) - log(frameAspect)| for best matching.
+     */
+    scoreLayoutFit(photos, layout, slideRatio) {
+        const r = slideRatio || (960 / 540);
+        const n = Math.min(photos.length, layout.frames.length);
+        if (n === 0) return Infinity;
+
+        const frameAspects = layout.frames.slice(0, n).map(f => this.getFrameAspect(f, r));
+        const photoAspects = photos.slice(0, n).map(p => {
+            const dims = this._cache.get(p.file);
+            return dims ? dims.aspect : 1;
+        });
+
+        // Optimal assignment using greedy matching (same as matchPhotosToFrames)
+        const usedPhotos = new Set();
+        let totalScore = 0;
+
+        const frameOrder = Array.from({ length: n }, (_, i) => i);
+        frameOrder.sort((a, b) => Math.abs(Math.log(frameAspects[b])) - Math.abs(Math.log(frameAspects[a])));
+
+        for (const fi of frameOrder) {
+            const fa = frameAspects[fi];
+            let bestIdx = -1;
+            let bestScore = Infinity;
+            for (let pi = 0; pi < n; pi++) {
+                if (usedPhotos.has(pi)) continue;
+                const score = Math.abs(Math.log(photoAspects[pi]) - Math.log(fa));
+                if (score < bestScore) { bestScore = score; bestIdx = pi; }
+            }
+            if (bestIdx >= 0) { totalScore += bestScore; usedPhotos.add(bestIdx); }
+        }
+
+        // Penalize layouts that waste photos (have fewer frames than photos in batch)
+        // or have more frames than photos (empty frames)
+        const unusedPhotos = photos.length - n;
+        const emptyFrames = layout.frames.length - n;
+        totalScore += emptyFrames * 0.5;
+
+        return totalScore;
+    }
+
+    clear() {
+        this._cache.clear();
+    }
+}
+
+const imageAnalyzer = new ImageAnalyzer();
+
+
+/**
+ * Build an intelligent layout sequence that picks the best layout
+ * for each slide's batch of photos to minimize cropping.
+ * Enabled layouts are the pool to choose from. Randomization is added
+ * as a tiebreaker so similar-scoring layouts get variety.
+ */
+function buildSmartLayoutSequence(enabledLayouts, photos, slideRatio) {
+    if (enabledLayouts.length === 0) return [];
+    if (enabledLayouts.length === 1) {
+        const count = Math.ceil(photos.length / enabledLayouts[0].frames.length) + 1;
+        return Array(count).fill(enabledLayouts[0]);
+    }
+
+    const sequence = [];
+    let photoIdx = 0;
+    let lastLayoutId = null;
+
+    while (photoIdx < photos.length) {
+        // For the next batch, try each layout and score it
+        let bestLayout = null;
+        let bestScore = Infinity;
+        const candidates = [];
+
+        for (const layout of enabledLayouts) {
+            const batchSize = Math.min(layout.frames.length, photos.length - photoIdx);
+            const batch = photos.slice(photoIdx, photoIdx + batchSize);
+            const score = imageAnalyzer.scoreLayoutFit(batch, layout, slideRatio);
+            candidates.push({ layout, score });
+        }
+
+        // Sort by score, add small random jitter for variety
+        candidates.sort((a, b) => a.score - b.score);
+
+        // Pick from top candidates (within 20% of best score) with randomness
+        const topScore = candidates[0].score;
+        const threshold = topScore * 1.2 + 0.1; // 20% tolerance
+        const topCandidates = candidates.filter(c => c.score <= threshold);
+
+        // Prefer not repeating the last layout
+        let picked = topCandidates[0].layout;
+        if (topCandidates.length > 1 && picked.id === lastLayoutId) {
+            // Pick randomly from remaining top candidates
+            const others = topCandidates.filter(c => c.layout.id !== lastLayoutId);
+            if (others.length > 0) {
+                picked = others[Math.floor(Math.random() * others.length)].layout;
+            }
+        } else if (topCandidates.length > 1) {
+            // Random pick from top candidates for variety
+            picked = topCandidates[Math.floor(Math.random() * topCandidates.length)].layout;
+        }
+
+        sequence.push(picked);
+        lastLayoutId = picked.id;
+        photoIdx += picked.frames.length;
+    }
+
+    return sequence;
+}
+
+
+// ===================== PDF GENERATOR =====================
+
+class PDFGenerator {
+
+    /**
+     * Generate a PDF slideshow with face-aware cropping.
+     */
+    static async generate(photos, layoutSequence, options, onProgress) {
+        const { PDFDocument, rgb } = PDFLib;
+        const pdfDoc = await PDFDocument.create();
+
+        const slideSize = SLIDE_SIZES[options.slideSize] || SLIDE_SIZES['16:9'];
+        const SW = slideSize.width;
+        const SH = slideSize.height;
+        const slideRatio = SW / SH;
+        const qualitySettings = QUALITY_MAP[options.quality] || QUALITY_MAP.medium;
+        const bgRGB = PDFGenerator._hexToRgb(options.bgColor);
+
+        // Phase 1: Analyze dimensions
+        onProgress(0, 'Analyzing photo dimensions...');
+        await imageAnalyzer.analyzeAll(photos, (pct) => {
+            onProgress(pct * 0.03, `Analyzing dimensions... ${Math.round(pct * 100)}%`);
+        });
+
+        // Phase 2: Detect faces
+        onProgress(0.03, 'Detecting faces...');
+        await faceAwareCropper.analyzeAll(photos, (pct) => {
+            onProgress(0.03 + pct * 0.07, `Detecting faces... ${Math.round(pct * 100)}%`);
+        });
+
+        // Phase 3: Build smart layout sequence
+        onProgress(0.10, 'Optimizing layout sequence...');
+        const smartLayouts = buildSmartLayoutSequence(layoutSequence, photos, slideRatio);
+
+        let photoIdx = 0;
+        const total = photos.length;
+        let slideNum = 0;
+
+        onProgress(0.11, 'Generating slides...');
+
+        while (photoIdx < total) {
+            const layout = smartLayouts[slideNum] || layoutSequence[slideNum % layoutSequence.length];
+            slideNum++;
+
+            const page = pdfDoc.addPage([SW, SH]);
+
+            page.drawRectangle({
+                x: 0, y: 0, width: SW, height: SH,
+                color: rgb(bgRGB.r / 255, bgRGB.g / 255, bgRGB.b / 255)
+            });
+
+            const batchSize = Math.min(layout.frames.length, total - photoIdx);
+            const batchPhotos = photos.slice(photoIdx, photoIdx + batchSize);
+            const matched = imageAnalyzer.matchPhotosToFrames(batchPhotos, layout.frames, slideRatio);
+
+            for (let fi = 0; fi < layout.frames.length; fi++) {
+                if (fi >= matched.length) break;
+                const frame = layout.frames[fi];
+                const photo = matched[fi];
+                photoIdx++;
+
+                try {
+                    const frameW = (frame.w / 100) * SW;
+                    const frameH = (frame.h / 100) * SH;
+                    const frameX = (frame.x / 100) * SW;
+                    const frameY = SH - (frame.y / 100) * SH - frameH;
+
+                    const frameAspect = frameW / frameH;
+                    const maxPixelW = Math.round(frameW * qualitySettings.dpiScale);
+
+                    // Get face focus point for this photo
+                    const focus = await faceAwareCropper.getFocusPoint(photo);
+
+                    const imageBytes = await PDFGenerator._cropImage(
+                        photo.file, frameAspect, maxPixelW, qualitySettings.jpegQuality, focus
+                    );
+
+                    const image = await pdfDoc.embedJpg(imageBytes);
+
+                    page.drawImage(image, {
+                        x: frameX,
+                        y: frameY,
+                        width: frameW,
+                        height: frameH
+                    });
+                } catch (err) {
+                    console.warn(`Skipped photo "${photo.name}":`, err.message);
+                }
+
+                const pct = 0.11 + (photoIdx / total) * 0.87;
+                onProgress(pct, `Processing photo ${photoIdx} of ${total} (slide ${slideNum})...`);
+
+                if (photoIdx % 5 === 0) {
+                    await new Promise(r => setTimeout(r, 0));
+                }
+            }
+        }
+
+        onProgress(0.98, 'Finalizing PDF...');
+        const pdfBytes = await pdfDoc.save();
+        onProgress(1, 'Done!');
+        return pdfBytes;
+    }
+
+    /**
+     * Crop an image to target aspect ratio, centered on the face focus point.
+     * focus = { fx: 0-1, fy: 0-1 } where 0.5 is center.
+     */
+    static _cropImage(file, targetAspect, maxWidth, jpegQuality, focus) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            const url = URL.createObjectURL(file);
+
+            img.onload = () => {
+                try {
+                    const imgW = img.naturalWidth;
+                    const imgH = img.naturalHeight;
+                    const imgAspect = imgW / imgH;
+                    const fx = focus ? focus.fx : 0.5;
+                    const fy = focus ? focus.fy : 0.5;
+
+                    let cropX, cropY, cropW, cropH;
+
+                    if (imgAspect > targetAspect) {
+                        // Image is wider than needed — crop width, preserve height
+                        cropH = imgH;
+                        cropW = Math.round(imgH * targetAspect);
+                        // Center crop on face X position
+                        const idealCenterX = Math.round(fx * imgW);
+                        cropX = idealCenterX - Math.round(cropW / 2);
+                        cropX = Math.max(0, Math.min(imgW - cropW, cropX));
+                        cropY = 0;
+                    } else {
+                        // Image is taller than needed — crop height, preserve width
+                        cropW = imgW;
+                        cropH = Math.round(imgW / targetAspect);
+                        // Center crop on face Y position
+                        const idealCenterY = Math.round(fy * imgH);
+                        cropY = idealCenterY - Math.round(cropH / 2);
+                        cropY = Math.max(0, Math.min(imgH - cropH, cropY));
+                        cropX = 0;
+                    }
+
+                    let outW = Math.min(cropW, maxWidth);
+                    let outH = Math.round(outW / targetAspect);
+                    if (outW < 10) outW = 10;
+                    if (outH < 10) outH = 10;
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = outW;
+                    canvas.height = outH;
+                    const ctx = canvas.getContext('2d');
+
+                    ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, outW, outH);
+
+                    canvas.toBlob(
+                        (blob) => {
+                            URL.revokeObjectURL(url);
+                            if (!blob) { reject(new Error('Canvas toBlob failed')); return; }
+                            blob.arrayBuffer().then(resolve).catch(reject);
+                        },
+                        'image/jpeg',
+                        jpegQuality
+                    );
+                } catch (err) {
+                    URL.revokeObjectURL(url);
+                    reject(err);
+                }
+            };
+
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                reject(new Error(`Failed to load image: ${file.name}`));
+            };
+
+            img.src = url;
+        });
+    }
+
+    static _hexToRgb(hex) {
+        hex = hex.replace('#', '');
+        return {
+            r: parseInt(hex.substring(0, 2), 16),
+            g: parseInt(hex.substring(2, 4), 16),
+            b: parseInt(hex.substring(4, 6), 16)
+        };
+    }
+}
+
+
+// ===================== PREVIEW RENDERER =====================
+
+class PreviewRenderer {
+    /**
+     * Render a slide preview with face-aware cropping.
+     */
+    static async renderSlide(photos, layout, bgColor, canvasWidth, slideRatio) {
+        const ratio = slideRatio || (16 / 9);
+        const canvasHeight = Math.round(canvasWidth / ratio);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        const ctx = canvas.getContext('2d');
+
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+        await imageAnalyzer.analyzeAll(photos);
+        const matched = imageAnalyzer.matchPhotosToFrames(photos, layout.frames, ratio);
+
+        for (let i = 0; i < layout.frames.length && i < matched.length; i++) {
+            const frame = layout.frames[i];
+            const photo = matched[i];
+
+            const fx = (frame.x / 100) * canvasWidth;
+            const fy = (frame.y / 100) * canvasHeight;
+            const fw = (frame.w / 100) * canvasWidth;
+            const fh = (frame.h / 100) * canvasHeight;
+
+            try {
+                const img = await PreviewRenderer._loadImage(photo.file);
+                const frameAspect = fw / fh;
+                const imgAspect = img.naturalWidth / img.naturalHeight;
+
+                // Get face focus point
+                const focus = await faceAwareCropper.getFocusPoint(photo);
+
+                let sx, sy, sw, sh;
+                if (imgAspect > frameAspect) {
+                    sh = img.naturalHeight;
+                    sw = Math.round(sh * frameAspect);
+                    const idealCX = Math.round(focus.fx * img.naturalWidth);
+                    sx = Math.max(0, Math.min(img.naturalWidth - sw, idealCX - Math.round(sw / 2)));
+                    sy = 0;
+                } else {
+                    sw = img.naturalWidth;
+                    sh = Math.round(sw / frameAspect);
+                    const idealCY = Math.round(focus.fy * img.naturalHeight);
+                    sy = Math.max(0, Math.min(img.naturalHeight - sh, idealCY - Math.round(sh / 2)));
+                    sx = 0;
+                }
+
+                ctx.drawImage(img, sx, sy, sw, sh, fx, fy, fw, fh);
+            } catch (err) {
+                ctx.fillStyle = '#ddd';
+                ctx.fillRect(fx, fy, fw, fh);
+                ctx.fillStyle = '#999';
+                ctx.font = '14px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('Error', fx + fw / 2, fy + fh / 2);
+            }
+        }
+
+        for (let i = photos.length; i < layout.frames.length; i++) {
+            const frame = layout.frames[i];
+            const fx2 = (frame.x / 100) * canvasWidth;
+            const fy2 = (frame.y / 100) * canvasHeight;
+            const fw2 = (frame.w / 100) * canvasWidth;
+            const fh2 = (frame.h / 100) * canvasHeight;
+            ctx.fillStyle = '#e0e0e0';
+            ctx.fillRect(fx2, fy2, fw2, fh2);
+        }
+
+        return canvas;
+    }
+
+    static _loadImage(file) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            const url = URL.createObjectURL(file);
+            img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Failed to load')); };
+            img.src = url;
+        });
+    }
+}
+
+
+// ===================== MAIN APP =====================
+
+class App {
+    constructor() {
+        this.photos = [];
+        this.customLayouts = [];
+        this.selectedLayoutIds = new Set();
+        this.layoutEditor = new LayoutEditor();
+
+        this._loadCustomLayouts();
+        this._bindTabs();
+        this._bindPhotoUpload();
+        this._bindGenerate();
+        this._bindLayoutCreation();
+
+        this._renderDefaultLayouts();
+        this._renderCustomLayouts();
+    }
+
+    // --- Tab Navigation ---
+
+    _bindTabs() {
+        document.querySelectorAll('.tab').forEach(tabBtn => {
+            tabBtn.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+                tabBtn.classList.add('active');
+                const panel = document.getElementById(tabBtn.dataset.tab + '-tab');
+                panel.classList.add('active');
+
+                if (tabBtn.dataset.tab === 'generate') {
+                    this._refreshGenerateTab();
+                }
+            });
+        });
+    }
+
+    // --- Layout Management ---
+
+    _bindLayoutCreation() {
+        document.getElementById('create-layout-btn').addEventListener('click', () => {
+            this.layoutEditor.open(null, (layout) => this._saveCustomLayout(layout));
+        });
+    }
+
+    _saveCustomLayout(layout) {
+        const idx = this.customLayouts.findIndex(l => l.id === layout.id);
+        if (idx >= 0) {
+            this.customLayouts[idx] = layout;
+        } else {
+            this.customLayouts.push(layout);
+        }
+        this._persistCustomLayouts();
+        this._renderCustomLayouts();
+    }
+
+    _deleteCustomLayout(id) {
+        this.customLayouts = this.customLayouts.filter(l => l.id !== id);
+        this.selectedLayoutIds.delete(id);
+        this._persistCustomLayouts();
+        this._renderCustomLayouts();
+    }
+
+    _persistCustomLayouts() {
+        try {
+            localStorage.setItem('slideshowCustomLayouts', JSON.stringify(this.customLayouts));
+        } catch (e) { /* localStorage may be unavailable */ }
+    }
+
+    _loadCustomLayouts() {
+        try {
+            const data = localStorage.getItem('slideshowCustomLayouts');
+            if (data) this.customLayouts = JSON.parse(data);
+        } catch (e) { /* ignore */ }
+    }
+
+    _getAllLayouts() {
+        return [...DEFAULT_LAYOUTS, ...this.customLayouts];
+    }
+
+    _renderDefaultLayouts() {
+        const container = document.getElementById('default-layouts');
+        container.innerHTML = '';
+        DEFAULT_LAYOUTS.forEach(layout => {
+            container.appendChild(this._createLayoutCard(layout, false));
+        });
+    }
+
+    _renderCustomLayouts() {
+        const container = document.getElementById('custom-layouts');
+        container.innerHTML = '';
+        const noMsg = document.getElementById('no-custom-msg');
+
+        if (this.customLayouts.length === 0) {
+            if (!noMsg) {
+                const p = document.createElement('p');
+                p.className = 'empty-msg';
+                p.id = 'no-custom-msg';
+                p.textContent = 'No custom layouts yet. Click the button above to create one.';
+                container.appendChild(p);
+            } else {
+                container.appendChild(noMsg);
+            }
+            return;
+        }
+
+        this.customLayouts.forEach(layout => {
+            container.appendChild(this._createLayoutCard(layout, true));
+        });
+    }
+
+    _createLayoutCard(layout, isCustom) {
+        const card = document.createElement('div');
+        card.className = 'layout-card';
+
+        // Thumbnail
+        const thumb = document.createElement('div');
+        thumb.className = 'layout-thumbnail';
+        layout.frames.forEach((frame, i) => {
+            const box = document.createElement('div');
+            box.className = 'frame-preview frame-color-' + (i % FRAME_COLORS.length);
+            box.style.left = frame.x + '%';
+            box.style.top = frame.y + '%';
+            box.style.width = frame.w + '%';
+            box.style.height = frame.h + '%';
+            box.textContent = i + 1;
+            thumb.appendChild(box);
+        });
+        card.appendChild(thumb);
+
+        // Name
+        const name = document.createElement('div');
+        name.className = 'layout-card-name';
+        name.textContent = layout.name;
+        card.appendChild(name);
+
+        // Count
+        const count = document.createElement('div');
+        count.className = 'layout-card-count';
+        count.textContent = layout.frames.length + ' photo' + (layout.frames.length !== 1 ? 's' : '') + ' per slide';
+        card.appendChild(count);
+
+        // Actions for custom layouts
+        if (isCustom) {
+            const actions = document.createElement('div');
+            actions.className = 'layout-card-actions';
+
+            const editBtn = document.createElement('button');
+            editBtn.className = 'btn btn-primary btn-sm';
+            editBtn.textContent = 'Edit';
+            editBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.layoutEditor.open(layout, (updated) => this._saveCustomLayout(updated));
+            });
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'btn btn-danger btn-sm';
+            delBtn.textContent = 'Delete';
+            delBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (confirm(`Delete layout "${layout.name}"?`)) {
+                    this._deleteCustomLayout(layout.id);
+                }
+            });
+
+            actions.appendChild(editBtn);
+            actions.appendChild(delBtn);
+            card.appendChild(actions);
+        }
+
+        return card;
+    }
+
+    // --- Photo Upload ---
+
+    _bindPhotoUpload() {
+        const uploadZone = document.getElementById('upload-zone');
+        const fileInput = document.getElementById('file-input');
+        const folderInput = document.getElementById('folder-input');
+        const clearBtn = document.getElementById('clear-photos-btn');
+        const sortBtn = document.getElementById('sort-name-btn');
+
+        // File input
+        fileInput.addEventListener('change', (e) => {
+            this._addFiles(e.target.files);
+            fileInput.value = '';
+        });
+
+        // Folder input
+        folderInput.addEventListener('change', (e) => {
+            this._addFiles(e.target.files);
+            folderInput.value = '';
+        });
+
+        // Drag and drop
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('drag-over');
+        });
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('drag-over');
+        });
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('drag-over');
+            if (e.dataTransfer.files) {
+                this._addFiles(e.dataTransfer.files);
+            }
+        });
+
+        // Clear all
+        clearBtn.addEventListener('click', () => {
+            if (confirm('Remove all uploaded photos?')) {
+                this._clearPhotos();
+            }
+        });
+
+        // Sort by name
+        sortBtn.addEventListener('click', () => {
+            this.photos.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+            this._renderPhotos();
+        });
+    }
+
+    _addFiles(fileList) {
+        const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff'];
+        for (const file of fileList) {
+            if (imageTypes.includes(file.type) || file.type.startsWith('image/')) {
+                this.photos.push({
+                    file: file,
+                    name: file.name,
+                    objectUrl: URL.createObjectURL(file)
+                });
+            }
+        }
+        this._renderPhotos();
+    }
+
+    _clearPhotos() {
+        this.photos.forEach(p => URL.revokeObjectURL(p.objectUrl));
+        this.photos = [];
+        this._renderPhotos();
+    }
+
+    _removePhoto(index) {
+        URL.revokeObjectURL(this.photos[index].objectUrl);
+        this.photos.splice(index, 1);
+        this._renderPhotos();
+    }
+
+    _renderPhotos() {
+        const grid = document.getElementById('photos-grid');
+        const toolbar = document.getElementById('photos-toolbar');
+        const countEl = document.getElementById('photo-count');
+
+        grid.innerHTML = '';
+        countEl.textContent = this.photos.length;
+        toolbar.style.display = this.photos.length > 0 ? '' : 'none';
+
+        this.photos.forEach((photo, i) => {
+            const thumb = document.createElement('div');
+            thumb.className = 'photo-thumb';
+
+            const img = document.createElement('img');
+            img.src = photo.objectUrl;
+            img.alt = photo.name;
+            img.loading = 'lazy';
+            thumb.appendChild(img);
+
+            const nameEl = document.createElement('div');
+            nameEl.className = 'photo-name';
+            nameEl.textContent = photo.name;
+            thumb.appendChild(nameEl);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'remove-photo';
+            removeBtn.textContent = '×';
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._removePhoto(i);
+            });
+            thumb.appendChild(removeBtn);
+
+            grid.appendChild(thumb);
+        });
+    }
+
+    // --- Generate Tab ---
+
+    _bindGenerate() {
+        const bgInput = document.getElementById('bg-color');
+        const bgHex = document.getElementById('bg-color-hex');
+        bgInput.addEventListener('input', () => {
+            bgHex.textContent = bgInput.value;
+            this._updateSummary();
+        });
+
+        document.getElementById('image-quality').addEventListener('change', () => this._updateSummary());
+        document.getElementById('photo-order').addEventListener('change', () => this._updateSummary());
+        document.getElementById('slide-size').addEventListener('change', () => this._updateSummary());
+
+        document.getElementById('preview-btn').addEventListener('click', () => this._preview());
+        document.getElementById('export-btn').addEventListener('click', () => this._export());
+    }
+
+    _refreshGenerateTab() {
+        this._renderLayoutSelection();
+        this._updateSummary();
+    }
+
+    _renderLayoutSelection() {
+        const container = document.getElementById('layout-selection');
+        container.innerHTML = '';
+
+        const allLayouts = this._getAllLayouts();
+        allLayouts.forEach(layout => {
+            const card = document.createElement('div');
+            card.className = 'layout-select-card' + (this.selectedLayoutIds.has(layout.id) ? ' selected' : '');
+
+            const thumb = document.createElement('div');
+            thumb.className = 'mini-thumb';
+            layout.frames.forEach((frame, i) => {
+                const box = document.createElement('div');
+                box.className = 'frame-preview frame-color-' + (i % FRAME_COLORS.length);
+                box.style.left = frame.x + '%';
+                box.style.top = frame.y + '%';
+                box.style.width = frame.w + '%';
+                box.style.height = frame.h + '%';
+                thumb.appendChild(box);
+            });
+            card.appendChild(thumb);
+
+            const name = document.createElement('div');
+            name.className = 'layout-select-name';
+            name.textContent = layout.name;
+            card.appendChild(name);
+
+            card.addEventListener('click', () => {
+                if (this.selectedLayoutIds.has(layout.id)) {
+                    this.selectedLayoutIds.delete(layout.id);
+                    card.classList.remove('selected');
+                } else {
+                    this.selectedLayoutIds.add(layout.id);
+                    card.classList.add('selected');
+                }
+                this._updateSummary();
+            });
+
+            container.appendChild(card);
+        });
+    }
+
+    _getSelectedLayouts() {
+        const all = this._getAllLayouts();
+        return all.filter(l => this.selectedLayoutIds.has(l.id));
+    }
+
+    _updateSummary() {
+        const summaryEl = document.getElementById('generate-summary');
+        const selectedLayouts = this._getSelectedLayouts();
+        const photoCount = this.photos.length;
+
+        if (photoCount === 0 || selectedLayouts.length === 0) {
+            let msgs = [];
+            if (photoCount === 0) msgs.push('Upload photos in the Photos tab');
+            if (selectedLayouts.length === 0) msgs.push('Select at least one layout above');
+            summaryEl.innerHTML = `<span style="color:#e8590c">⚠ ${msgs.join(' and ')} to continue.</span>`;
+            return;
+        }
+
+        // Estimate total slides (average across selected layouts since order is random)
+        const avgFrames = selectedLayouts.reduce((s, l) => s + l.frames.length, 0) / selectedLayouts.length;
+        const slideCount = Math.ceil(photoCount / avgFrames);
+
+        const layoutNames = selectedLayouts.map(l => `"${l.name}"`).join(', ');
+        summaryEl.innerHTML = `
+            <strong>${photoCount}</strong> photos → ~<strong>${slideCount}</strong> slides<br>
+            Auto-optimizing from ${selectedLayouts.length} enabled layout${selectedLayouts.length !== 1 ? 's' : ''} to minimize cropping<br>
+            <small style="color:#666">Each slide picks the best-fitting layout for its photos. Face detection shifts crops to keep faces visible.</small><br>
+            Quality: <strong>${document.getElementById('image-quality').value}</strong> |
+            Size: <strong>${document.getElementById('slide-size').value}</strong> |
+            Background: <span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid #ccc;background:${document.getElementById('bg-color').value}"></span>
+        `;
+    }
+
+    _getOrderedPhotos() {
+        const order = document.getElementById('photo-order').value;
+        let photos = [...this.photos];
+        if (order === 'name') {
+            photos.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        } else if (order === 'shuffle') {
+            for (let i = photos.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [photos[i], photos[j]] = [photos[j], photos[i]];
+            }
+        }
+        return photos;
+    }
+
+    async _preview() {
+        const selectedLayouts = this._getSelectedLayouts();
+        if (selectedLayouts.length === 0) {
+            alert('Select at least one layout first.');
+            return;
+        }
+        if (this.photos.length === 0) {
+            alert('Upload photos first.');
+            return;
+        }
+
+        const previewArea = document.getElementById('preview-area');
+        const previewSlides = document.getElementById('preview-slides');
+        previewArea.style.display = '';
+        previewSlides.innerHTML = '<p style="padding:20px;color:#888;">Generating preview...</p>';
+
+        const photos = this._getOrderedPhotos();
+        const bgColor = document.getElementById('bg-color').value;
+        const maxPreviews = Math.min(8, Math.ceil(photos.length / selectedLayouts[0].frames.length));
+
+        await new Promise(r => setTimeout(r, 50)); // let UI update
+
+        previewSlides.innerHTML = '';
+        let photoIdx = 0;
+
+        // Smart layout selection for preview
+        await imageAnalyzer.analyzeAll(photos);
+        const slideRatio = 960 / 540; // 16:9
+        const smartLayouts = buildSmartLayoutSequence(selectedLayouts, photos, slideRatio);
+
+        for (let i = 0; i < maxPreviews && photoIdx < photos.length; i++) {
+            const layout = smartLayouts[i] || selectedLayouts[i % selectedLayouts.length];
+            const slidePhotos = photos.slice(photoIdx, photoIdx + layout.frames.length);
+            photoIdx += layout.frames.length;
+
+            try {
+                const canvas = await PreviewRenderer.renderSlide(slidePhotos, layout, bgColor, 400, slideRatio);
+                canvas.className = 'preview-slide';
+                canvas.style.borderRadius = '6px';
+
+                const wrapper = document.createElement('div');
+                wrapper.style.flex = '0 0 auto';
+
+                const label = document.createElement('div');
+                label.className = 'preview-slide-label';
+                label.textContent = `Slide ${i + 1}`;
+
+                wrapper.appendChild(canvas);
+                wrapper.appendChild(label);
+                previewSlides.appendChild(wrapper);
+            } catch (err) {
+                console.warn('Preview error:', err);
+            }
+        }
+    }
+
+    async _export() {
+        const selectedLayouts = this._getSelectedLayouts();
+        if (selectedLayouts.length === 0) {
+            alert('Select at least one layout first.');
+            return;
+        }
+        if (this.photos.length === 0) {
+            alert('Upload photos first.');
+            return;
+        }
+
+        const exportBtn = document.getElementById('export-btn');
+        const progressContainer = document.getElementById('progress-container');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+
+        exportBtn.disabled = true;
+        progressContainer.style.display = '';
+        progressFill.style.width = '0%';
+
+        const photos = this._getOrderedPhotos();
+        const options = {
+            bgColor: document.getElementById('bg-color').value,
+            quality: document.getElementById('image-quality').value,
+            slideSize: document.getElementById('slide-size').value
+        };
+
+        try {
+            const pdfBytes = await PDFGenerator.generate(
+                photos,
+                selectedLayouts,
+                options,
+                (pct, msg) => {
+                    progressFill.style.width = Math.round(pct * 100) + '%';
+                    progressText.textContent = msg;
+                }
+            );
+
+            // Trigger download
+            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `slideshow_${new Date().toISOString().slice(0, 10)}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            progressText.textContent = `Done! ${Math.round(pdfBytes.length / 1024 / 1024 * 10) / 10} MB PDF downloaded.`;
+        } catch (err) {
+            console.error('PDF generation error:', err);
+            progressText.textContent = 'Error: ' + err.message;
+            progressFill.style.width = '0%';
+        }
+
+        exportBtn.disabled = false;
+    }
+}
+
+
+// ===================== INIT =====================
+
+document.addEventListener('DOMContentLoaded', () => {
+    window.app = new App();
+});

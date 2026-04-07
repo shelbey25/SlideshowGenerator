@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Slideshow Generator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app">
+        <header class="app-header">
+            <h1>📸 Slideshow Generator</h1>
+            <p class="subtitle">Create beautiful photo slideshows and export to PDF</p>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab active" data-tab="layouts">
+                <span class="tab-num">1</span> Layouts
+            </button>
+            <button class="tab" data-tab="photos">
+                <span class="tab-num">2</span> Photos
+            </button>
+            <button class="tab" data-tab="generate">
+                <span class="tab-num">3</span> Generate
+            </button>
+        </nav>
+
+        <main class="tab-content">
+            <!-- ==================== LAYOUTS TAB ==================== -->
+            <section id="layouts-tab" class="tab-panel active">
+                <div class="section-header">
+                    <h2>Slide Layouts</h2>
+                    <p>Choose from default layouts or create your own custom presets by dragging and positioning photo frames.</p>
+                </div>
+
+                <h3>Default Layouts</h3>
+                <div class="layouts-grid" id="default-layouts"></div>
+
+                <div class="custom-section">
+                    <div class="custom-header">
+                        <h3>Custom Layouts</h3>
+                        <button class="btn btn-primary" id="create-layout-btn">+ Create Custom Layout</button>
+                    </div>
+                    <div class="layouts-grid" id="custom-layouts">
+                        <p class="empty-msg" id="no-custom-msg">No custom layouts yet. Click the button above to create one.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==================== PHOTOS TAB ==================== -->
+            <section id="photos-tab" class="tab-panel">
+                <div class="section-header">
+                    <h2>Upload Photos</h2>
+                    <p>Upload your photos — supports hundreds of images at once.</p>
+                </div>
+
+                <div class="upload-zone" id="upload-zone">
+                    <div class="upload-content">
+                        <div class="upload-icon">📷</div>
+                        <p class="upload-title">Drag &amp; drop photos here</p>
+                        <p class="upload-hint">or</p>
+                        <div class="upload-buttons">
+                            <label class="btn btn-primary">
+                                Browse Files
+                                <input type="file" id="file-input" multiple accept="image/*" hidden>
+                            </label>
+                            <label class="btn btn-secondary">
+                                Browse Folder
+                                <input type="file" id="folder-input" webkitdirectory hidden>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="photos-toolbar" id="photos-toolbar" style="display:none">
+                    <div class="photos-info">
+                        <strong><span id="photo-count">0</span> photos</strong> uploaded
+                    </div>
+                    <div class="photos-actions">
+                        <button class="btn btn-sm btn-secondary" id="sort-name-btn">Sort by Name</button>
+                        <button class="btn btn-sm btn-danger" id="clear-photos-btn">Clear All</button>
+                    </div>
+                </div>
+
+                <div class="photos-grid" id="photos-grid"></div>
+            </section>
+
+            <!-- ==================== GENERATE TAB ==================== -->
+            <section id="generate-tab" class="tab-panel">
+                <div class="section-header">
+                    <h2>Generate Slideshow</h2>
+                    <p>Configure your slideshow options and export as PDF.</p>
+                </div>
+
+                <div class="generate-config">
+                    <div class="config-left">
+                        <div class="option-group">
+                            <label class="option-label">Layouts to Use <span class="hint">(select one or more, they will cycle)</span></label>
+                            <div id="layout-selection" class="layout-selection"></div>
+                        </div>
+                    </div>
+
+                    <div class="config-right">
+                        <div class="option-group">
+                            <label class="option-label" for="bg-color">Background Color</label>
+                            <div class="color-picker-row">
+                                <input type="color" id="bg-color" value="#ffffff">
+                                <span id="bg-color-hex">#ffffff</span>
+                            </div>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label" for="image-quality">Image Quality</label>
+                            <select id="image-quality" class="select-input">
+                                <option value="high">High (150 DPI, larger file)</option>
+                                <option value="medium" selected>Medium (100 DPI)</option>
+                                <option value="low">Low (72 DPI, smaller file)</option>
+                            </select>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label" for="photo-order">Photo Order</label>
+                            <select id="photo-order" class="select-input">
+                                <option value="original">Original Upload Order</option>
+                                <option value="name">Sort by Filename</option>
+                                <option value="shuffle">Shuffle Randomly</option>
+                            </select>
+                        </div>
+
+                        <div class="option-group">
+                            <label class="option-label" for="slide-size">Slide Size</label>
+                            <select id="slide-size" class="select-input">
+                                <option value="16:9" selected>Widescreen 16:9</option>
+                                <option value="4:3">Standard 4:3</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="generate-summary" id="generate-summary"></div>
+
+                <div class="generate-actions">
+                    <button class="btn btn-lg btn-primary" id="preview-btn">Preview Slides</button>
+                    <button class="btn btn-lg btn-success" id="export-btn">Export PDF</button>
+                </div>
+
+                <div class="progress-container" id="progress-container" style="display:none">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <span class="progress-text" id="progress-text">Preparing...</span>
+                </div>
+
+                <div class="preview-area" id="preview-area" style="display:none">
+                    <h3>Preview <span class="hint">(first few slides)</span></h3>
+                    <div class="preview-slides" id="preview-slides"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- ==================== LAYOUT EDITOR MODAL ==================== -->
+    <div class="modal-overlay" id="layout-editor-modal" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="editor-title">Create Layout</h2>
+                <button class="modal-close" id="editor-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="editor-toolbar">
+                    <button class="btn btn-primary btn-sm" id="add-frame-btn">+ Add Frame</button>
+                    <button class="btn btn-danger btn-sm" id="remove-frame-btn" disabled>Remove Selected</button>
+                    <span class="editor-info" id="frame-count">0 frames</span>
+                    <div class="editor-spacer"></div>
+                    <span class="editor-hint">Click frames to select. Drag to move. Use corner handles to resize.</span>
+                </div>
+                <div class="editor-main">
+                    <div class="editor-canvas-wrapper">
+                        <div class="editor-canvas" id="editor-canvas"></div>
+                    </div>
+                    <div class="editor-sidebar">
+                        <h4>Selected Frame</h4>
+                        <div id="editor-properties" class="editor-properties">
+                            <p class="empty-msg">No frame selected</p>
+                        </div>
+                        <div id="editor-props-form" style="display:none">
+                            <div class="prop-row">
+                                <label>X:</label>
+                                <input type="number" id="prop-x" min="0" max="100" step="0.5">
+                                <span>%</span>
+                            </div>
+                            <div class="prop-row">
+                                <label>Y:</label>
+                                <input type="number" id="prop-y" min="0" max="100" step="0.5">
+                                <span>%</span>
+                            </div>
+                            <div class="prop-row">
+                                <label>Width:</label>
+                                <input type="number" id="prop-w" min="5" max="100" step="0.5">
+                                <span>%</span>
+                            </div>
+                            <div class="prop-row">
+                                <label>Height:</label>
+                                <input type="number" id="prop-h" min="5" max="100" step="0.5">
+                                <span>%</span>
+                            </div>
+                        </div>
+                        <hr>
+                        <h4>All Frames</h4>
+                        <div id="frame-list" class="frame-list"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <input type="text" id="preset-name" placeholder="Layout name..." class="text-input" maxlength="40">
+                <button class="btn btn-success" id="save-preset-btn">Save Layout</button>
+                <button class="btn btn-secondary" id="cancel-editor-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
