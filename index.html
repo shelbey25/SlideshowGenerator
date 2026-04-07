@@ -134,6 +134,21 @@
                                 <option value="4:3">Standard 4:3</option>
                             </select>
                         </div>
+
+                        <div class="option-group">
+                            <label class="option-label" for="border-width">Photo Borders</label>
+                            <div class="border-config-row">
+                                <select id="border-width" class="select-input border-select">
+                                    <option value="0">None</option>
+                                    <option value="1" selected>Thin (1pt)</option>
+                                    <option value="2">Medium (2pt)</option>
+                                    <option value="3">Thick (3pt)</option>
+                                    <option value="5">Extra Thick (5pt)</option>
+                                </select>
+                                <input type="color" id="border-color" value="#ffffff">
+                                <span id="border-color-hex">#ffffff</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -152,7 +167,7 @@
                 </div>
 
                 <div class="preview-area" id="preview-area" style="display:none">
-                    <h3>Preview <span class="hint">(first few slides)</span></h3>
+                    <h3>Preview <span class="hint">(click any slide to adjust crops)</span></h3>
                     <div class="preview-slides" id="preview-slides"></div>
                 </div>
             </section>
@@ -215,6 +230,29 @@
                 <input type="text" id="preset-name" placeholder="Layout name..." class="text-input" maxlength="40">
                 <button class="btn btn-success" id="save-preset-btn">Save Layout</button>
                 <button class="btn btn-secondary" id="cancel-editor-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== RECROP MODAL ==================== -->
+    <div class="modal-overlay" id="recrop-modal" style="display:none">
+        <div class="modal recrop-modal-dialog">
+            <div class="modal-header">
+                <div class="recrop-nav">
+                    <button class="btn btn-secondary btn-sm" id="recrop-prev-btn">&larr; Prev</button>
+                    <h2 id="recrop-title">Slide 1</h2>
+                    <button class="btn btn-secondary btn-sm" id="recrop-next-btn">Next &rarr;</button>
+                </div>
+                <button class="modal-close" id="recrop-close">&times;</button>
+            </div>
+            <div class="modal-body recrop-body">
+                <div class="recrop-slide" id="recrop-slide"></div>
+                <p class="recrop-hint">Click &amp; drag any photo to adjust its crop position</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="recrop-reset-btn">Reset Crops on This Slide</button>
+                <div style="flex:1"></div>
+                <button class="btn btn-success" id="recrop-done-btn">Done</button>
             </div>
         </div>
     </div>

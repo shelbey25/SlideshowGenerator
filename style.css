@@ -465,10 +465,12 @@ h3 {
 }
 .preview-area h3 { margin-bottom: 12px; }
 .preview-slides {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 16px;
-    overflow-x: auto;
     padding: 8px 0 16px;
+    max-height: 70vh;
+    overflow-y: auto;
 }
 .preview-slide {
     flex: 0 0 auto;
@@ -724,3 +726,106 @@ h3 {
 .frame-color-5 { background: rgba(0, 188, 212, 0.5); }
 .frame-color-6 { background: rgba(244, 67, 54, 0.5); }
 .frame-color-7 { background: rgba(96, 125, 139, 0.5); }
+
+/* === BORDER CONFIG === */
+.border-config-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.border-config-row .border-select {
+    width: auto;
+    flex: 0 0 auto;
+}
+.border-config-row input[type="color"] {
+    width: 44px;
+    height: 36px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    cursor: pointer;
+    padding: 2px;
+}
+#border-color-hex {
+    font-size: 13px;
+    color: #888;
+    font-family: monospace;
+}
+
+/* === INTERACTIVE PREVIEW === */
+.preview-slide-wrapper {
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    border-radius: 8px;
+}
+.preview-slide-wrapper:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+}
+.preview-slide-wrapper .preview-slide {
+    width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 6px;
+    border: 1px solid #ddd;
+}
+.preview-progress {
+    padding: 40px 20px;
+    color: #888;
+    text-align: center;
+    font-size: 15px;
+    grid-column: 1 / -1;
+}
+
+/* === RECROP MODAL === */
+.recrop-modal-dialog {
+    max-width: 950px;
+}
+.recrop-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.recrop-nav h2 {
+    font-size: 18px;
+    white-space: nowrap;
+}
+.recrop-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+.recrop-slide {
+    position: relative;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    max-width: 100%;
+}
+.recrop-frame {
+    position: absolute;
+    overflow: hidden;
+    cursor: grab;
+    box-sizing: border-box;
+}
+.recrop-frame:hover {
+    outline: 2px solid rgba(74, 144, 217, 0.7);
+    outline-offset: -2px;
+    z-index: 5;
+}
+.recrop-frame.dragging {
+    cursor: grabbing;
+    outline: 2px solid #e8590c;
+    outline-offset: -2px;
+    z-index: 10;
+}
+.recrop-frame img {
+    position: absolute;
+    pointer-events: none;
+    user-select: none;
+}
+.recrop-hint {
+    font-size: 13px;
+    color: #999;
+    text-align: center;
+}
