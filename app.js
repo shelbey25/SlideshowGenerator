@@ -1098,6 +1098,155 @@ class PDFGenerator {
 }
 
 
+// ===================== PPTX GENERATOR =====================
+
+class PPTXGenerator {
+    /**
+     * Generate a PPTX blob from photos + layouts.
+     * Uses PptxGenJS (loaded via CDN). Returns a Blob.
+     */
+    static async generate(photos, layoutSequence, options = {}, onProgress = () => {}) {
+        const pptx = new PptxGenJS();
+
+        const slideSizeKey = options.slideSize || '16:9';
+        const slideSize = SLIDE_SIZES[slideSizeKey] || SLIDE_SIZES['16:9'];
+        const SW = slideSize.width;
+        const SH = slideSize.height;
+        const slideRatio = SW / SH;
+        const qualitySettings = QUALITY_MAP[options.quality] || QUALITY_MAP.medium;
+        const cropOverrides = options.cropOverrides || null;
+        const borderWidth = options.borderWidth || 0;
+        const borderColor = options.borderColor || '#ffffff';
+
+        // PptxGenJS uses inches. 16:9 = 10" x 5.625", 4:3 = 10" x 7.5"
+        const pptxW = 10;
+        const pptxH = slideSizeKey === '4:3' ? 7.5 : 5.625;
+        pptx.defineLayout({ name: 'CUSTOM', width: pptxW, height: pptxH });
+        pptx.layout = 'CUSTOM';
+
+        let slideDataList;
+
+        if (options.previewSlideData && options.previewSlideData.length > 0) {
+            slideDataList = options.previewSlideData;
+            onProgress(0.10, 'Using preview layout...');
+        } else {
+            onProgress(0, 'Analyzing photo dimensions...');
+            await imageAnalyzer.analyzeAll(photos, (pct) => {
+                onProgress(pct * 0.03, `Analyzing dimensions... ${Math.round(pct * 100)}%`);
+            });
+
+            onProgress(0.03, 'Detecting faces...');
+            await faceAwareCropper.analyzeAll(photos, (pct) => {
+                onProgress(0.03 + pct * 0.07, `Detecting faces... ${Math.round(pct * 100)}%`);
+            });
+
+            onProgress(0.10, 'Optimizing layout sequence...');
+            slideDataList = buildSmartSlideSequence(layoutSequence, photos, slideRatio);
+        }
+
+        let totalPhotos = 0;
+        for (const sd of slideDataList) totalPhotos += sd.matchedPhotos.length;
+        let photosDone = 0;
+
+        onProgress(0.11, 'Generating slides...');
+
+        // Convert border width from PDF points to inches (1pt = 1/72")
+        const borderInches = borderWidth / 72;
+        // PptxGenJS border size is in points
+        const borderPts = borderWidth;
+
+        for (let si = 0; si < slideDataList.length; si++) {
+            const sd = slideDataList[si];
+            const slide = pptx.addSlide();
+
+            // Set background color
+            slide.background = { fill: options.bgColor ? options.bgColor.replace('#', '') : '000000' };
+
+            for (let fi = 0; fi < sd.layout.frames.length && fi < sd.matchedPhotos.length; fi++) {
+                const frame = sd.layout.frames[fi];
+                const photo = sd.matchedPhotos[fi];
+                photosDone++;
+
+                try {
+                    // Convert frame percentages to inches
+                    const frameX = (frame.x / 100) * pptxW;
+                    const frameY = (frame.y / 100) * pptxH;
+                    const frameW = (frame.w / 100) * pptxW;
+                    const frameH = (frame.h / 100) * pptxH;
+
+                    const frameAspect = (frame.w / frame.h) * slideRatio;
+                    const maxPixelW = Math.round((frame.w / 100) * SW * qualitySettings.dpiScale);
+
+                    let focus;
+                    if (cropOverrides && cropOverrides.has(photo.file)) {
+                        focus = cropOverrides.get(photo.file);
+                    } else {
+                        focus = await faceAwareCropper.getFocusPoint(photo);
+                    }
+
+                    const imageBytes = await PDFGenerator._cropImage(
+                        photo.file, frameAspect, maxPixelW, qualitySettings.jpegQuality, focus
+                    );
+
+                    // Convert ArrayBuffer to base64 data URI for PptxGenJS
+                    const base64 = PPTXGenerator._arrayBufferToBase64(imageBytes);
+                    const dataUri = 'image/jpeg;base64,' + base64;
+
+                    const imgOpts = {
+                        data: dataUri,
+                        x: frameX,
+                        y: frameY,
+                        w: frameW,
+                        h: frameH,
+                    };
+
+                    slide.addImage(imgOpts);
+
+                    // Draw border as a shape on top
+                    if (borderPts > 0) {
+                        slide.addShape('rect', {
+                            x: frameX,
+                            y: frameY,
+                            w: frameW,
+                            h: frameH,
+                            fill: { color: '', type: 'none' },
+                            line: {
+                                color: borderColor.replace('#', ''),
+                                width: borderPts,
+                            },
+                        });
+                    }
+                } catch (err) {
+                    console.warn(`Skipped photo "${photo.name}":`, err.message);
+                }
+
+                const pct = 0.11 + (photosDone / totalPhotos) * 0.84;
+                onProgress(pct, `Processing photo ${photosDone} of ${totalPhotos} (slide ${si + 1})...`);
+
+                if (photosDone % 5 === 0) {
+                    await new Promise(r => setTimeout(r, 0));
+                }
+            }
+        }
+
+        onProgress(0.95, 'Finalizing PPTX...');
+        const blob = await pptx.write({ outputType: 'blob' });
+        onProgress(1, 'Done!');
+        return blob;
+    }
+
+    static _arrayBufferToBase64(buffer) {
+        let binary = '';
+        const bytes = new Uint8Array(buffer);
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+    }
+}
+
+
 // ===================== PREVIEW RENDERER =====================
 
 class PreviewRenderer {
@@ -1532,6 +1681,7 @@ class App {
 
         document.getElementById('preview-btn').addEventListener('click', () => this._preview());
         document.getElementById('export-btn').addEventListener('click', () => this._export());
+        document.getElementById('export-pptx-btn').addEventListener('click', () => this._exportPptx());
     }
 
     _refreshGenerateTab() {
@@ -1781,6 +1931,71 @@ class App {
         }
 
         exportBtn.disabled = false;
+    }
+
+    async _exportPptx() {
+        const selectedLayouts = this._getSelectedLayouts();
+        if (selectedLayouts.length === 0) {
+            alert('Select at least one layout first.');
+            return;
+        }
+        if (this.photos.length === 0) {
+            alert('Upload photos first.');
+            return;
+        }
+
+        const exportBtn = document.getElementById('export-btn');
+        const exportPptxBtn = document.getElementById('export-pptx-btn');
+        const progressContainer = document.getElementById('progress-container');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+
+        exportBtn.disabled = true;
+        exportPptxBtn.disabled = true;
+        progressContainer.style.display = '';
+        progressFill.style.width = '0%';
+
+        const photos = this._getOrderedPhotos();
+        const options = {
+            bgColor: document.getElementById('bg-color').value,
+            quality: document.getElementById('image-quality').value,
+            slideSize: document.getElementById('slide-size').value,
+            borderWidth: parseFloat(document.getElementById('border-width').value) || 0,
+            borderColor: document.getElementById('border-color').value,
+            cropOverrides: this._cropOverrides,
+            previewSlideData: this._previewSlideData,
+        };
+
+        try {
+            const blob = await PPTXGenerator.generate(
+                photos,
+                selectedLayouts,
+                options,
+                (pct, msg) => {
+                    progressFill.style.width = Math.round(pct * 100) + '%';
+                    progressText.textContent = msg;
+                }
+            );
+
+            // Trigger download
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `slideshow_${new Date().toISOString().slice(0, 10)}.pptx`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            progressText.textContent = `Done! ${Math.round(blob.size / 1024 / 1024 * 10) / 10} MB PPTX downloaded.`;
+        } catch (err) {
+            console.error('PPTX generation error:', err);
+            progressText.textContent = 'Error: ' + err.message;
+            progressFill.style.width = '0%';
+        }
+
+        exportBtn.disabled = false;
+        exportPptxBtn.disabled = false;
     }
 
     // --- Recrop Modal ---
