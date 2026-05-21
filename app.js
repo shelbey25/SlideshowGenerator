@@ -1288,7 +1288,8 @@ class PreviewRenderer {
             const fh = (frame.h / 100) * canvasHeight;
 
             try {
-                const img = await PreviewRenderer._loadImage(photo.file);
+                const loadedImage = await PreviewRenderer._loadImage(photo);
+                const { img, cleanup } = loadedImage;
                 const frameAspect = fw / fh;
                 const imgAspect = img.naturalWidth / img.naturalHeight;
 
@@ -1316,6 +1317,7 @@ class PreviewRenderer {
                 }
 
                 ctx.drawImage(img, sx, sy, sw, sh, fx, fy, fw, fh);
+                cleanup();
 
                 // Draw border
                 if (borderWidth > 0) {
@@ -1353,12 +1355,23 @@ class PreviewRenderer {
         return canvas;
     }
 
-    static _loadImage(file) {
+    static _loadImage(photo) {
         return new Promise((resolve, reject) => {
             const img = new Image();
-            const url = URL.createObjectURL(file);
-            img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Failed to load')); };
+            const url = photo.objectUrl || URL.createObjectURL(photo.file);
+            const shouldRevoke = !photo.objectUrl;
+            const cleanup = () => {
+                if (shouldRevoke) {
+                    URL.revokeObjectURL(url);
+                }
+            };
+            img.onload = () => {
+                resolve({ img, cleanup });
+            };
+            img.onerror = () => {
+                cleanup();
+                reject(new Error(`Failed to load image: ${photo.name}`));
+            };
             img.src = url;
         });
     }

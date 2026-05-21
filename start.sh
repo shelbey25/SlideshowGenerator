@@ -2,7 +2,7 @@
 # Slideshow Generator - Local Server Launcher
 # This starts a simple HTTP server and opens the app in your browser.
 
-PORT=8080
+PORT="${PORT:-8080}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "============================================"
@@ -16,7 +16,9 @@ echo ""
 cd "$DIR"
 
 # Open browser after a short delay
-(sleep 1 && open "http://localhost:$PORT" 2>/dev/null || xdg-open "http://localhost:$PORT" 2>/dev/null) &
+if [[ -z "${RAILWAY_ENVIRONMENT:-}" ]]; then
+    (sleep 1 && open "http://localhost:$PORT" 2>/dev/null || xdg-open "http://localhost:$PORT" 2>/dev/null) &
+fi
 
 # Start HTTP server
 if command -v python3 &>/dev/null; then
